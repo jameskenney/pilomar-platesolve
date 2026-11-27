@@ -11,6 +11,7 @@
     pilomar-ps model show|fit|reset      inspect or rebuild the pointing model
     pilomar-ps simulate M31 --az 1.5 --alt -0.8   test the loop without hardware
     pilomar-ps simulate-align            test alignment against a virtual tilted mount
+    pilomar-ps report                    test results summary to copy and share
 """
 
 from __future__ import annotations
@@ -130,11 +131,14 @@ def cmd_solve(cfg, args):
     elif target:
         hint.ra_deg, hint.dec_deg = target.ra_deg, target.dec_deg
         hint.radius_deg = float(cfg["solver"]["search_radius_deg"])
+    log = Logbook(cfg["data_dir"])
     try:
         sol = solve_with_fallback(solver, args.image, hint, bool(cfg["solver"].get("blind_retry", True)))
     except SolveError as e:
         print(f"No solution: {e}")
+        log.event("solve_cmd_failed", error=str(e))
         return 2
+    log.event("solve_cmd", solution=sol.to_dict())
     out = {"solution": sol.to_dict()}
     print(f"\n{Path(args.image).name}")
     print(sol.summary())
@@ -236,7 +240,8 @@ def cmd_center(cfg, args):
     mount = _make_mount(cfg, args)
     source = _make_source(cfg, args, mount)
     log = Logbook(cfg["data_dir"])
-    log.event("start", target=asdict(target), site=asdict(site), mount=mount.name)
+    log.event("start", command="center", target=target.id, mount=mount.name)
+    t_start = time.monotonic()
     model, state = _load_model(cfg, args)
     if args.no_model or args.image:
         model = None
@@ -253,8 +258,9 @@ def cmd_center(cfg, args):
     except KeyboardInterrupt:
         print("\nstopped")
         return 130
-    log.event("end", success=res.success, reason=res.reason)
-    print(f"\n  log: {log.session}")
+    log.event("end", success=res.success, reason=res.reason, final_error=res.final_error)
+    print(f"\n  total time: {time.monotonic() - t_start:.0f} s, {len(res.iterations)} picture(s)")
+    print(f"  log: {log.session}")
     return 0 if res.success else 1
 
 
@@ -338,6 +344,8 @@ def cmd_align(cfg, args):
     source = _make_source(cfg, args, mount)
     _, state = _load_model(cfg, args)
     log = Logbook(cfg["data_dir"])
+    log.event("align_start", targets=[t.id for t in targets], mount=mount.name)
+    t_start = time.monotonic()
     try:
         model, samples = run_alignment(targets, cfg=cfg, site=site, source=source,
                                        solver=make_solver(cfg, _workdir(cfg)), mount=mount,
@@ -348,6 +356,7 @@ def cmd_align(cfg, args):
     except KeyboardInterrupt:
         print("\nstopped")
         return 130
+    print(f"\n  alignment took {(time.monotonic() - t_start) / 60:.1f} min")
     if model is None:
         return 1
     mp, _ = _model_paths(cfg)
@@ -374,7 +383,9 @@ def cmd_goto(cfg, args):
     mount = _make_mount(cfg, args)
     if not args.no_slew and not mount.goto(target):
         return 1
-    ok = apply_model_correction(target, model, state, site, mount, cfg, astro.utcnow())
+    log = Logbook(cfg["data_dir"])
+    ok = apply_model_correction(target, model, state, site, mount, cfg, astro.utcnow(), log=log)
+    log.event("goto", target=target.id, ok=ok, slewed=not args.no_slew)
     if ok:
         print(f"  {target.id} should now be centred to within about {max(model.rms_after_deg, 0.05) * 2:.1f}°."
               " Use 'pilomar-ps center' to confirm with a picture.")
@@ -423,6 +434,18 @@ def cmd_simulate_align(cfg, args):
     worst = max(r[2] for r in results) if results else 99
     print(f"\nworst error after model correction: {worst:.3f}°")
     return 0 if worst < 0.25 else 1
+
+
+def cmd_report(cfg, args):
+    from .report import render
+    since = _parse_time(args.since) if args.since else None
+    text = render(cfg, since)
+    print(text)
+    dest = Path(cfg["data_dir"]) / "report.txt"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(text + "\n")
+    print(f"\n(also saved to {dest})")
+    return 0
 
 
 def cmd_config(cfg, args):
@@ -496,6 +519,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("model", help="show, refit or clear the pointing model")
     s.add_argument("action", choices=["show", "fit", "reset"])
 
+    s = sub.add_parser("report", help="summary of test results to copy and share (no personal details)")
+    s.add_argument("--since", help="only include runs from this date, e.g. 2026-12-01")
+
     s = sub.add_parser("simulate-align", help="test alignment on a virtual mount with known faults")
     s.add_argument("--ia", type=float, default=1.2, help="azimuth home offset, degrees")
     s.add_argument("--ie", type=float, default=-0.6, help="altitude zero offset")
@@ -526,7 +552,7 @@ def build_parser() -> argparse.ArgumentParser:
 COMMANDS = {"check": cmd_check, "solve": cmd_solve, "target": cmd_target, "suggest": cmd_suggest,
             "center": cmd_center, "watch": cmd_watch, "simulate": cmd_simulate, "config": cmd_config,
             "align": cmd_align, "goto": cmd_goto, "model": cmd_model,
-            "simulate-align": cmd_simulate_align}
+            "simulate-align": cmd_simulate_align, "report": cmd_report}
 
 
 def main(argv=None) -> int:

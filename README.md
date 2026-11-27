@@ -241,6 +241,7 @@ pilomar-ps align                       # startup alignment (pointing model)
 pilomar-ps goto m31                    # GOTO + model correction, no picture
 pilomar-ps model show|fit|reset        # inspect, refine or clear the model
 pilomar-ps simulate-align              # test alignment on a virtual tilted mount
+pilomar-ps report                      # summary of your test results to copy and share
 pilomar-ps config                      # show all settings
 ```
 
@@ -298,8 +299,13 @@ match yours.
 | Startup alignment and model GOTO | ⏳ Not yet tested |
 | Automatic Tune through tmux | ⏳ Checked only against a stand-in for Pi-lomar's menus |
 
-If you test it on a different build, please open an issue with your hardware and
-results so this table can grow.
+After testing, run `pilomar-ps report`. It prints your hardware, software
+versions, solve times, centring accuracy and alignment results as one block,
+ready to paste into an issue. It leaves out your location, hostname, username
+and file paths. `--since 2026-12-01` limits it to recent runs.
+
+If you test it on a different build, please open an issue with that report so
+this table can grow.
 
 ## Known limitations
 

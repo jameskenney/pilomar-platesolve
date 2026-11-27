@@ -63,6 +63,8 @@ def run_alignment(targets: list[Target], *, cfg: dict, site: Site, source, solve
             sol = solve_with_fallback(solver, image, hint, True)
         except SolveError as e:
             say(f"  no solution ({e}); skipping this point")
+            if log:
+                log.event("solve_failed", target=t.id, error=str(e))
             continue
         l_alt, l_az = astro.j2000_to_altaz(t.ra_deg, t.dec_deg, site, when)
         # Mount frame = Pi-lomar's logical position. Any Tune moves made before
@@ -74,7 +76,8 @@ def run_alignment(targets: list[Target], *, cfg: dict, site: Site, source, solve
         say(f"  mount az {m_az:7.2f} alt {m_alt:6.2f}  |  actual az {a_az:7.2f} alt {a_alt:6.2f}"
             f"  |  error az {s.d_az:+.2f}° alt {s.d_alt:+.2f}°")
         if log:
-            log.event("align_sample", target=t.id, image=str(image), sample=s.__dict__)
+            log.event("align_sample", target=t.id, image=str(image), sample=s.__dict__,
+                      solution=sol.to_dict())
     if len(samples) < 2:
         say("\nToo few solved pictures to fit a model.")
         return None, samples

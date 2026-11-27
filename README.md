@@ -270,6 +270,37 @@ If centring reports that the error is growing, flip `mount.az_sign` or
 `mount.alt_sign` to `-1`. If corrections consistently stop short or overshoot,
 check `steps_per_degree_*` against the figure Pi-lomar prints on its Tune screen.
 
+## Tested hardware
+
+Reference build used to develop and test this add-on. Other Pi-lomar builds
+should work: change `optics` and `mount.steps_per_degree_*` in `config.json` to
+match yours.
+
+| Part | Reference build |
+|---|---|
+| Computer | Raspberry Pi 5, 8 GB RAM, 64 GB microSD |
+| Operating system | Raspberry Pi OS (Legacy, 64-bit), Debian Bookworm |
+| Pi-lomar software | 1.3.0 ([Short-bus/pilomar](https://github.com/Short-bus/pilomar)) |
+| Motor controller | Raspberry Pi Pico 2 running CircuitPython 10.3.2, following the [Pi-lomar TMC2209 + Pico 2 controller upgrade](https://www.instructables.com/Pi-lomar-TMC2209-Pico2-Motor-Controller-Upgrade/) |
+| Motor drivers | 2 × BigTreeTech TMC2209 V1.3, 1/4 microstepping |
+| Motors | 2 × StepperOnline 17HM19-2004S (0.9° per step) |
+| Gearing | 60:1 worm gear, then a 4:1 final drive (384,000 steps per turn at 1/4 microstepping) |
+| Camera | Raspberry Pi HQ camera (IMX477) with a 16 mm C-mount lens (about 22° × 17° field) |
+| Plate solver | astrometry.net from apt, with `astrometry-data-2mass-08-19` index files |
+
+### Test status
+
+| Feature | Status |
+|---|---|
+| Unit tests and simulated centring and alignment | ✅ Passing (also run automatically on GitHub) |
+| Plate solving real images on the Pi | ⏳ Not yet tested |
+| Live centring, advisor mode | ⏳ Not yet tested |
+| Startup alignment and model GOTO | ⏳ Not yet tested |
+| Automatic Tune through tmux | ⏳ Checked only against a stand-in for Pi-lomar's menus |
+
+If you test it on a different build, please open an issue with your hardware and
+results so this table can grow.
+
 ## Known limitations
 
 * `tmux` mode sends keystrokes, so it depends on Pi-lomar's menu layout. The

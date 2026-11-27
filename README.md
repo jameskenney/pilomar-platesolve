@@ -310,7 +310,7 @@ match yours.
 | Plate solver on the Pi, synthetic sky (`selftest`) | ✅ 27 Nov 2026: 7 of 7 solved, 1.5–2.1 s each, centre within 2–14″ (a fraction of a 79″ pixel), rotation within 0.02°, scale within 0.01% |
 | Centring loop, real solver + virtual mount (`selftest --center`) | ✅ 27 Nov 2026: 0.82° → 0.015° in 3 pictures, 6 s |
 | Camera capture (`capture`) | ✅ 27 Nov 2026: 2028 × 1520 picture in 0.6 s |
-| Automatic Tune through tmux | ✅ 27 Nov 2026: menu keys checked against Pi-lomar 1.3.0; ±5° azimuth and altitude moved the right way and returned |
+| Automatic Tune through tmux | ✅ 27 Nov 2026: menu keys checked against Pi-lomar 1.3.0; ±5° azimuth and altitude moved the right way and returned. One keystroke was lost while a motor moved, so tmux mode now reads Pi-lomar's screen and waits for each prompt (v0.3.1) |
 | Plate solving real night-sky pictures | ⏳ Not yet tested |
 | Live centring under the sky | ⏳ Not yet tested |
 | Startup alignment and model GOTO | ⏳ Not yet tested |
@@ -325,7 +325,10 @@ this table can grow.
 
 ## Known limitations
 
-* `tmux` mode sends keystrokes, so it depends on Pi-lomar's menu layout. The
+* `tmux` mode types into Pi-lomar's menus. It reads the screen and waits for each
+  prompt before typing (Pi-lomar ignores keys typed while a motor moves), backs out
+  to the main menu first if needed, and stops with a message if it sees a screen it
+  doesn't recognise. It depends on Pi-lomar's menu layout. The
   defaults are checked against Pi-lomar 1.3.0; a future Pi-lomar release that
   renumbers Motor tools would need `mount.tmux.tune_keys` updating. Pi-lomar must be
   at its main menu when a correction is sent.

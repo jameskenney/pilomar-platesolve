@@ -57,9 +57,16 @@ DEFAULTS: dict = {
         "alt_sign": 1,
         "tmux": {
             "session": "pilomar",
+            # "verified": read Pi-lomar's screen and wait for each prompt (default).
+            # "blind": type tune_keys on a timer (older behaviour; can lose keys
+            # while a motor is moving).
+            "mode": "verified",
+            "motor_tools_option": "21",   # Pi-lomar 1.3.0 main menu
+            "tune_az_option": "4",        # Pi-lomar 1.3.0 Motor tools menu
+            "tune_alt_option": "5",
+            "steps_per_second_estimate": 300,  # only sets how long to wait for a move
             "key_delay_s": 0.8,
-            # UNVERIFIED menu paths: check them by hand once and adjust.
-            # {az_steps} / {alt_steps} are replaced with integers.
+            # Blind mode only. {az_steps} / {alt_steps} are replaced with integers.
             "tune_keys": ["21", "Enter", "4", "Enter", "{az_steps}", "Enter", "x", "Enter",
                           "5", "Enter", "{alt_steps}", "Enter", "x", "Enter", "x", "Enter"],
             "capture_keys": [],

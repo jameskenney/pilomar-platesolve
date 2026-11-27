@@ -15,6 +15,7 @@ Back ends:
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -133,12 +134,132 @@ class TmuxMount(Mount):
         if keys:
             self.send([str(k) for k in keys])
 
+    # ------------------------------------------------------------------
+    # Screen-aware ("verified") mode: read Pi-lomar's screen through tmux and
+    # wait for each prompt before typing the next key. Typing ahead on a timer
+    # loses keys when Pi-lomar is busy moving a motor (seen on real hardware).
+    # ------------------------------------------------------------------
+    HEADERS = {"main": "Pilomar main menu", "motor": "Motor tools menu", "select": "Select target"}
+
+    def _screen(self) -> list[str]:
+        out = subprocess.run(["tmux", "capture-pane", "-p", "-J", "-t", self.t.get("session", "pilomar"),
+                              "-S", "-2000"], capture_output=True, text=True, check=True).stdout
+        lines = [ln.rstrip() for ln in out.splitlines()]
+        while lines and not lines[-1]:
+            lines.pop()
+        return lines
+
+    def _state(self) -> tuple[str, list[str]]:
+        lines = self._screen()
+        last = lines[-1] if lines else ""
+        if "steps to move" in last:
+            return "tune_prompt", lines
+        if re.search(r"option\s*:\s*$", last, re.I):
+            best, where = "unknown_menu", -1
+            # A menu heading is a line on its own ("Select target" also appears
+            # inside the main menu as "1 Select target", which must not count).
+            for name, header in self.HEADERS.items():
+                for i in range(len(lines) - 1, -1, -1):
+                    if lines[i].strip() == header:
+                        if i > where:
+                            best, where = name, i
+                        break
+            return best, lines
+        return "busy", lines
+
+    def _type(self, text: str):
+        session = self.t.get("session", "pilomar")
+        if text:
+            subprocess.run(["tmux", "send-keys", "-t", session, "-l", "--", text], check=True)
+        subprocess.run(["tmux", "send-keys", "-t", session, "Enter"], check=True)
+
+    def _wait(self, want: str, timeout: float, min_prompts: int | None = None) -> list[str]:
+        """Wait until Pi-lomar shows the wanted prompt (and, for Tune, a new one)."""
+        deadline = time.monotonic() + timeout
+        poll = float(self.t.get("poll_s", 0.3))
+        state, lines = "busy", []
+        while time.monotonic() < deadline:
+            time.sleep(poll)
+            state, lines = self._state()
+            if state == want and (min_prompts is None or
+                                  sum("steps to move" in ln for ln in lines) >= min_prompts):
+                time.sleep(float(self.t.get("settle_s", 0.3)))
+                return lines
+        last = lines[-1] if lines else ""
+        raise RuntimeError(f"Pi-lomar did not reach '{want}' in {timeout:.0f} s "
+                           f"(now '{state}', last line: {last!r}). Check it with: "
+                           f"tmux attach -t {self.t.get('session', 'pilomar')}")
+
+    def ensure_main_menu(self):
+        """Back out of Tune / Motor tools / Select target to the main menu.
+
+        Never types 'x' at the main menu itself (that would exit Pi-lomar).
+        """
+        for _ in range(5):
+            state, lines = self._state()
+            if state == "main":
+                return
+            if state == "busy":
+                self._wait_not_busy(30)
+                continue
+            if state in ("tune_prompt", "motor", "select"):
+                self._type("x")
+                time.sleep(float(self.t.get("settle_s", 0.3)) + 0.5)
+                continue
+            last = lines[-1] if lines else ""
+            raise RuntimeError("Pi-lomar is at a screen this add-on doesn't recognise "
+                               f"(last line: {last!r}); return it to the main menu by hand.")
+        raise RuntimeError("could not get Pi-lomar back to its main menu")
+
+    def _wait_not_busy(self, timeout: float):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._state()[0] != "busy":
+                return
+            time.sleep(0.5)
+
+    def _tune_axis(self, option: str, steps: int):
+        before = sum("steps to move" in ln for ln in self._screen())
+        self._type(option)
+        self._wait("tune_prompt", 20, before + 1)
+        self._type(str(steps))
+        move_s = abs(steps) / float(self.t.get("steps_per_second_estimate", 300)) + 30
+        self._wait("tune_prompt", move_s, before + 2)
+        self._type("x")
+        self._wait("motor", 20)
+
+    def apply_verified(self, corr: Correction):
+        self.ensure_main_menu()
+        self._type(str(self.t.get("motor_tools_option", "21")))
+        self._wait("motor", 20)
+        if corr.az_steps:
+            self._tune_axis(str(self.t.get("tune_az_option", "4")), corr.az_steps)
+        if corr.alt_steps:
+            self._tune_axis(str(self.t.get("tune_alt_option", "5")), corr.alt_steps)
+        self._type("x")
+        self._wait("main", 20)
+
     def apply(self, corr: Correction) -> bool:
-        if not self.dry_run and not self.available():
+        if not corr.az_steps and not corr.alt_steps:
+            return True
+        print(f"  Sending Tune: azimuth {corr.az_steps:+d} steps, altitude {corr.alt_steps:+d} steps")
+        mode = self.t.get("mode", "verified")
+        if self.dry_run:
+            if mode == "verified":
+                print("    [dry-run] back to main menu, 21 (Motor tools)"
+                      + (f", 4 then {corr.az_steps}, x" if corr.az_steps else "")
+                      + (f", 5 then {corr.alt_steps}, x" if corr.alt_steps else "")
+                      + ", x (main menu) - waiting for each prompt")
+            else:
+                self.send(self.keys_for(corr))
+            return True
+        if not self.available():
             raise RuntimeError("tmux session not found; start Pi-lomar inside tmux "
                                f"(session name '{self.t.get('session', 'pilomar')}')")
-        print(f"  Sending Tune: azimuth {corr.az_steps:+d} steps, altitude {corr.alt_steps:+d} steps")
-        self.send(self.keys_for(corr))
+        if mode == "verified":
+            self.apply_verified(corr)
+        else:
+            self.send(self.keys_for(corr))
         return True
 
 

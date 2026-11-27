@@ -312,6 +312,8 @@ match yours.
 | Centring loop, real solver + virtual mount (`selftest --center`) | ✅ 27 Nov 2026: 0.82° → 0.015° in 3 pictures, 6 s |
 | Camera capture (`capture`) | ✅ 27 Nov 2026: 2028 × 1520 picture in 0.6 s |
 | Automatic Tune through tmux | ✅ 27 Nov 2026: menu keys checked against Pi-lomar 1.3.0; ±5° azimuth and altitude moved the right way and returned. One keystroke was lost while a motor moved, so tmux mode now reads Pi-lomar's screen and waits for each prompt (v0.3.1) |
+| Automatic GOTO through tmux (`slew`) | ✅ 27 Nov 2026: target entered through Select target → RA-DEC co-ordinates, GOTO to altitude 15°, azimuth 120°. Pi-lomar reported 120.007° / 15.006°, so its coordinate conversion and the add-on's agree to 0.01°. The 60° slew took about 3 minutes, and Pi-lomar returned to its menu afterwards |
+| Sun and horizon safety | ✅ Refused a test point 23° from the Sun and another at 3° altitude |
 | Plate solving real night-sky pictures | ⏳ Not yet tested |
 | Live centring under the sky | ⏳ Not yet tested |
 | Startup alignment and model GOTO | ⏳ Not yet tested |

@@ -1,0 +1,23 @@
+{
+  "_comment": "Only the settings you want to change need to be here; everything else uses built-in defaults. Run 'pilomar-ps config' to see them all.",
+
+  "pilomar_root": "/home/pi/pilomar",
+
+  "site": { "lat_deg": null, "lon_east_deg": null },
+
+  "optics": { "focal_length_mm": 16.0 },
+
+  "solver": { "backend": "astrometry" },
+
+  "capture": { "source": "pilomar-folder" },
+
+  "mount": {
+    "backend": "advisor",
+    "steps_per_degree_az": 1066.667,
+    "steps_per_degree_alt": 1066.667,
+    "az_sign": 1,
+    "alt_sign": 1
+  },
+
+  "centering": { "tolerance_deg": 0.1, "max_iterations": 6 }
+}

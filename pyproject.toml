@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pilomar-platesolve"
+version = "0.1.0"
+description = "Plate solving and automatic target centring for the Pi-lomar miniature observatory"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+pilomar-ps = "pilomar_platesolve.cli:main"
+
+[tool.setuptools]
+packages = ["pilomar_platesolve"]

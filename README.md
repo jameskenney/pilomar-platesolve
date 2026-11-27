@@ -295,6 +295,7 @@ match yours.
 | Operating system | Raspberry Pi OS (Legacy, 64-bit), Debian Bookworm, Python 3.11 |
 | Pi-lomar software | 1.3.0 ([Short-bus/pilomar](https://github.com/Short-bus/pilomar)) |
 | Motor controller | Raspberry Pi Pico 2 running CircuitPython 10.3.2, following the [Pi-lomar TMC2209 + Pico 2 controller upgrade](https://www.instructables.com/Pi-lomar-TMC2209-Pico2-Motor-Controller-Upgrade/) |
+| Controller board | Pi-lomar PCB 3.1.1 (Rev 2025-12-15), motor "Orientation" 1 on both axes |
 | Motor drivers | 2 × BigTreeTech TMC2209 V1.3, 1/4 microstepping |
 | Motors | 2 × StepperOnline 17HM19-2004S (0.9° per step) |
 | Gearing | 60:1 worm gear, then a 4:1 final drive (384,000 steps per turn at 1/4 microstepping) |

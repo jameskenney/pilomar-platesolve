@@ -118,7 +118,62 @@ class TmuxMount(Mount):
                 subprocess.run(["tmux", "send-keys", "-t", session, "-l", "--", k], check=True)
             time.sleep(delay)
 
+    @staticmethod
+    def radec_definition(target) -> str:
+        """Pi-lomar 1.3.0 RA-DEC format: 'ra hh mm ss dec +dd mm ss name' (J2000)."""
+        ra_h = (target.ra_deg % 360.0) / 15.0
+        rs = int(round(ra_h * 3600)) % (24 * 3600)
+        sign = "-" if target.dec_deg < 0 else "+"
+        ds = int(round(abs(target.dec_deg) * 3600))
+        name = re.sub(r"[^A-Za-z0-9_-]", "", target.id) or "target"
+        return (f"ra {rs // 3600:02d} {rs % 3600 // 60:02d} {rs % 60:02d} "
+                f"dec {sign}{ds // 3600:02d} {ds % 3600 // 60:02d} {ds % 60:02d} {name}")
+
+    def _count(self, lines, header) -> int:
+        return sum(ln.strip() == header for ln in lines)
+
+    def goto_verified(self, target):
+        self.ensure_main_menu()
+        self._type(str(self.t.get("select_target_option", "1")))
+        self._wait("select", 20)
+        self._type(str(self.t.get("radec_option", "11")))
+        self._wait("radec_prompt", 20)
+        before = self._count(self._screen(), self.HEADERS["main"])
+        self._type(self.radec_definition(target))
+        self._wait_main_after(before, 30)
+        before = self._count(self._screen(), self.HEADERS["main"])
+        self._type(str(self.t.get("goto_option", "4")))
+        # Wait for the main menu to come back (Pi-lomar may only return after the slew).
+        self._wait_main_after(before, float(self.t.get("goto_timeout_s", 300)))
+        time.sleep(float(self.t.get("goto_settle_s", 5)))
+
+    def _wait_main_after(self, before: int, timeout: float):
+        deadline = time.monotonic() + timeout
+        state, lines = "busy", []
+        while time.monotonic() < deadline:
+            time.sleep(float(self.t.get("poll_s", 0.3)))
+            state, lines = self._state()
+            if state == "main" and self._count(lines, self.HEADERS["main"]) > before:
+                return
+            if state not in ("busy", "main"):
+                break
+        last = lines[-1] if lines else ""
+        raise RuntimeError(f"Pi-lomar did not return to the main menu (now '{state}', "
+                           f"last line: {last!r}). Check it with: tmux attach -t "
+                           f"{self.t.get('session', 'pilomar')}")
+
     def goto(self, target) -> bool:
+        if self.t.get("mode", "verified") == "verified" and self.t.get("goto_via_radec", True):
+            print(f"  GOTO {target.id} via Pi-lomar (Select target -> RA-DEC -> GOTO)")
+            if self.dry_run:
+                print(f"    [dry-run] would type: {self.radec_definition(target)}")
+                return True
+            if not self.available():
+                raise RuntimeError("tmux session not found; start Pi-lomar inside tmux")
+            t0 = time.monotonic()
+            self.goto_verified(target)
+            print(f"  Pi-lomar is back at its main menu after {time.monotonic() - t0:.0f} s")
+            return True
         keys = self.t.get("goto_keys") or []
         if not keys:
             return super().goto(target)
@@ -154,6 +209,10 @@ class TmuxMount(Mount):
         last = lines[-1] if lines else ""
         if "steps to move" in last:
             return "tune_prompt", lines
+        if re.search(r"\(x to quit\)\s*:\s*$", last, re.I):
+            return "radec_prompt", lines
+        if "[y/N]" in last and "shut down" in last.lower():
+            return "shutdown_question", lines
         if re.search(r"option\s*:\s*$", last, re.I):
             best, where = "unknown_menu", -1
             # A menu heading is a line on its own ("Select target" also appears
@@ -202,7 +261,11 @@ class TmuxMount(Mount):
             if state == "busy":
                 self._wait_not_busy(30)
                 continue
-            if state in ("tune_prompt", "motor", "select"):
+            if state == "shutdown_question":
+                self._type("n")          # never let Pi-lomar shut down
+                time.sleep(float(self.t.get("settle_s", 0.3)) + 0.5)
+                continue
+            if state in ("tune_prompt", "radec_prompt", "motor", "select"):
                 self._type("x")
                 time.sleep(float(self.t.get("settle_s", 0.3)) + 0.5)
                 continue

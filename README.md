@@ -246,6 +246,7 @@ pilomar-ps selftest                    # indoor: real solver on synthetic star p
 pilomar-ps selftest --center           # indoor: centring loop, virtual mount, real solver
 pilomar-ps capture --exposure 0.01     # take one picture (camera check)
 pilomar-ps tune --az 1 --dry-run       # one Tune move through the configured mount mode
+pilomar-ps slew --altaz 10 190         # have Pi-lomar GOTO (test); refuses below 5° or near the Sun
 pilomar-ps config                      # show all settings
 ```
 
@@ -337,8 +338,9 @@ this table can grow.
 * Near the zenith, alt-az mounts need large azimuth moves for small sky offsets.
   Corrections are limited by their size on the sky (10°) and by azimuth turn (30°),
   and the tool warns above 80° altitude.
-* `tmux` GOTO for alignment (`mount.tmux.goto_keys`) is empty by default; until you
-  fill in and check the key sequence, `align` asks you to GOTO each target yourself.
+* In tmux mode, `align` and `goto` select each target in Pi-lomar through Select target
+  → RA-DEC co-ordinates (`ra hh mm ss dec +dd mm ss name`) and then GOTO. Every GOTO
+  is refused if the target is below 5° or within 30° of the Sun (`sun_avoid_deg`).
 * The ASTAP back end (`solver.backend = "astap"`) is included but less tested than astrometry.net.
 
 ## Roadmap

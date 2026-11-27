@@ -15,6 +15,7 @@
     pilomar-ps selftest [--center]       indoor test: real solver on synthetic star pictures
     pilomar-ps capture                   take one picture (camera check)
     pilomar-ps tune --az 1               send one Tune move (mount check)
+    pilomar-ps slew M31 | --altaz 10 190 have Pi-lomar GOTO (no correction)
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from .centering import (Logbook, center_target, expected_fov_width, pointing_err
                         solve_with_fallback)
 from .config import DEFAULTS, config_path, load_config
 from .align import choose_alignment_targets, run_alignment, samples_from_log
-from .centering import apply_model_correction
+from .centering import UnsafeTarget, apply_model_correction, check_goto_safe
 from .model import PointingModel, PointingState, fit_model
 from .mount import AdvisorMount, SimulatedMount, TmuxMount
 from .pilomar_bridge import newest_image, pilomar_running, site_from_config
@@ -380,9 +381,10 @@ def cmd_goto(cfg, args):
     model, state = _load_model(cfg, args)
     if model is None:
         sys.exit("error: no pointing model yet; run 'pilomar-ps align' first")
-    alt, _ = astro.j2000_to_altaz(target.ra_deg, target.dec_deg, site, astro.utcnow())
-    if alt < 5:
-        sys.exit(f"error: {target.id} is below the horizon")
+    try:
+        check_goto_safe(target, site, astro.utcnow(), cfg)
+    except UnsafeTarget as e:
+        sys.exit(f"error: {e}")
     mount = _make_mount(cfg, args)
     if not args.no_slew and not mount.goto(target):
         return 1
@@ -581,6 +583,37 @@ def cmd_tune(cfg, args):
     return 0
 
 
+def cmd_slew(cfg, args):
+    """Have Pi-lomar GOTO a target (no correction). --altaz makes a short test move."""
+    from .catalog import Target
+    site = _site(cfg)
+    now = astro.utcnow()
+    if args.altaz:
+        alt, az = args.altaz
+        ra, dec = astro.altaz_to_j2000(alt, az, site, now)
+        target = Target("slewtest", f"alt {alt:g} az {az:g}", ra, dec, source="altaz")
+        print(f"alt {alt:g}° az {az:g}° is RA {astro.format_ra(ra)} Dec {astro.format_dec(dec)} right now")
+    elif args.name:
+        target = _target(cfg, args.name)
+    else:
+        sys.exit("error: give a target name or --altaz ALT AZ")
+    try:
+        alt, sep = check_goto_safe(target, site, now, cfg)
+    except UnsafeTarget as e:
+        sys.exit(f"error: {e}")
+    print(f"{target.id}: altitude {alt:.1f}°, {sep:.0f}° from the Sun")
+    mount = _make_mount(cfg, args)
+    log = Logbook(cfg["data_dir"])
+    t0 = time.monotonic()
+    try:
+        ok = mount.goto(target)
+    except RuntimeError as e:
+        print(f"error: {e}")
+        return 3
+    log.event("slew", target=target.id, seconds=time.monotonic() - t0, ok=ok)
+    return 0 if ok else 1
+
+
 def cmd_config(cfg, args):
     if args.write_example:
         dest = config_path()
@@ -672,6 +705,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--mount", choices=["advisor", "tmux"])
     s.add_argument("--dry-run", action="store_true")
 
+    s = sub.add_parser("slew", help="have Pi-lomar GOTO a target, no correction (tmux test)")
+    s.add_argument("name", nargs="?")
+    s.add_argument("--altaz", nargs=2, type=float, metavar=("ALT", "AZ"),
+                   help="go to this altitude/azimuth (degrees) as it is right now")
+    s.add_argument("--mount", choices=["advisor", "tmux"])
+    s.add_argument("--dry-run", action="store_true")
+
     s = sub.add_parser("report", help="summary of test results to copy and share (no personal details)")
     s.add_argument("--since", help="only include runs from this date, e.g. 2026-12-01")
 
@@ -706,7 +746,8 @@ COMMANDS = {"check": cmd_check, "solve": cmd_solve, "target": cmd_target, "sugge
             "center": cmd_center, "watch": cmd_watch, "simulate": cmd_simulate, "config": cmd_config,
             "align": cmd_align, "goto": cmd_goto, "model": cmd_model,
             "simulate-align": cmd_simulate_align, "report": cmd_report,
-            "selftest": cmd_selftest, "capture": cmd_capture, "tune": cmd_tune}
+            "selftest": cmd_selftest, "capture": cmd_capture, "tune": cmd_tune,
+            "slew": cmd_slew}
 
 
 def main(argv=None) -> int:

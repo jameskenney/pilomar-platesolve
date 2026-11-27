@@ -12,7 +12,8 @@ from pathlib import Path
 from . import astro
 from .astro import Site, wrap180
 from .catalog import Target
-from .centering import Logbook, expected_fov_width, solve_with_fallback
+from .centering import (Logbook, UnsafeTarget, check_goto_safe, expected_fov_width,
+                        solve_with_fallback)
 from .model import PointingModel, PointingState, Sample, fit_model
 from .solvers import SolveError, SolveHint, Solver
 
@@ -54,6 +55,12 @@ def run_alignment(targets: list[Target], *, cfg: dict, site: Site, source, solve
     fov = expected_fov_width(cfg)
     for i, t in enumerate(targets, 1):
         say(f"\n[{i}/{len(targets)}] {t.id} {t.name}")
+        if getattr(mount, "name", "") != "simulated":
+            try:
+                check_goto_safe(t, site, astro.utcnow(), cfg)
+            except UnsafeTarget as e:
+                say(f"  skipping: {e}")
+                continue
         if not mount.goto(t):
             say("  stopped by user")
             break

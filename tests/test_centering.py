@@ -104,6 +104,24 @@ class TestCentering(unittest.TestCase):
             self.assertGreater(len(log.csv.read_text().splitlines()), 1)
 
 
+class TestSafety(unittest.TestCase):
+    def test_sun_and_horizon_refused(self):
+        from pilomar_platesolve.catalog import Target
+        from pilomar_platesolve.centering import UnsafeTarget, check_goto_safe
+        noon = datetime(2026, 11, 27, 18, 30, tzinfo=timezone.utc)   # local midday
+        jd = astro.julian_date(noon)
+        s_ra, s_dec = astro.date_to_j2000(*astro.sun_radec_of_date(jd), jd)
+        with self.assertRaises(UnsafeTarget):
+            check_goto_safe(Target("near_sun", "", s_ra + 5, s_dec), SITE, noon, cfg())
+        ra, dec = astro.altaz_to_j2000(-10, 0, SITE, noon)
+        with self.assertRaises(UnsafeTarget):
+            check_goto_safe(Target("low", "", ra, dec), SITE, noon, cfg())
+        ra, dec = astro.altaz_to_j2000(40, 0, SITE, noon)        # north, far from the Sun
+        alt, sep = check_goto_safe(Target("ok", "", ra, dec), SITE, noon, cfg())
+        self.assertAlmostEqual(alt, 40, delta=0.1)
+        self.assertGreater(sep, 30)
+
+
 class TestMounts(unittest.TestCase):
     def test_steps(self):
         m = AdvisorMount(DEFAULTS["mount"], interactive=False)

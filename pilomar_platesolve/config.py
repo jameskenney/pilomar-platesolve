@@ -65,13 +65,20 @@ DEFAULTS: dict = {
             "tune_az_option": "4",        # Pi-lomar 1.3.0 Motor tools menu
             "tune_alt_option": "5",
             "steps_per_second_estimate": 300,  # only sets how long to wait for a move
+            # Automatic GOTO (verified mode): Select target (1) -> RA-DEC
+            # co-ordinates (11) -> "ra hh mm ss dec +dd mm ss name" -> GOTO (4).
+            "goto_via_radec": True,
+            "select_target_option": "1",
+            "radec_option": "11",
+            "goto_option": "4",
+            "goto_timeout_s": 300,
+            "goto_settle_s": 5,
             "key_delay_s": 0.8,
             # Blind mode only. {az_steps} / {alt_steps} are replaced with integers.
             "tune_keys": ["21", "Enter", "4", "Enter", "{az_steps}", "Enter", "x", "Enter",
                           "5", "Enter", "{alt_steps}", "Enter", "x", "Enter", "x", "Enter"],
             "capture_keys": [],
-            # Optional, UNVERIFIED: keys to select a target and GOTO it, e.g.
-            # ["1", "Enter", "3", "Enter", "{target}", "Enter", "4", "Enter"].
+            # Blind mode only: keys to select a target and GOTO it.
             # Empty = you do the GOTO in Pi-lomar when asked.
             "goto_keys": [],
             "goto_wait_s": 60,       # time allowed for a slew before the next step
@@ -88,6 +95,9 @@ DEFAULTS: dict = {
         "settle_s": 3.0,             # wait after a move before the next picture
         "zenith_warn_alt_deg": 80.0,
     },
+
+    # Never GOTO closer than this to the Sun.
+    "sun_avoid_deg": 30.0,
 
     "suggest": {"min_alt_deg": 25.0, "max_mag": 9.0, "moon_min_sep_deg": 25.0, "limit": 12},
 }

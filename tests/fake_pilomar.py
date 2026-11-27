@@ -51,13 +51,60 @@ def tune(name):
         log.flush()
 
 
+SELECT = """
+ Select target
+ 1 Resume last observation      2 Repeat earlier observations
+11 RA-DEC co-ordinates         12 Fixed ALT-AZ point
+ x Exit                         ? Refresh"""
+
+
+def select_target():
+    while True:
+        print(SELECT)
+        c = ask("Choose option : ")
+        if c == "x":
+            print("No target selected: Please try again.")
+            return
+        if c != "11":
+            print(f"'{c}' Unrecognised. Try again.")
+            continue
+        print("RadecObject: Create a target from RA and DEC values.")
+        print("Definition format: RA hh mm ss DEC ddd mm ss name")
+        while True:
+            d = ask("Definition (x to quit): ").split()
+            if d and d[0].lower() == "x":
+                break
+            if not d or d[0].lower() != "ra":
+                print("1st term must be 'ra'. Try again")
+                continue
+            if len(d) != 9 or d[4].lower() != "dec":
+                print("Definition not understood. Try again")
+                continue
+            log.write("TARGET " + " ".join(d) + "\n")
+            log.flush()
+            print(f"Target: {d[8]} (radec)")
+            return
+
+
 while True:
     print(MAIN)
     a = ask("Menu option : ")
     if a == "x":
-        log.write("EXIT\n")
+        if ask("Do you really want to shut down? [y/N] ").lower() == "y":
+            log.write("EXIT\n")
+            log.flush()
+            break
+        continue
+    if a == "1":
+        select_target()
+        continue
+    if a == "4":
+        print("Moving to target...")
+        time.sleep(1.5)
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        log.write("GOTO\n")
         log.flush()
-        break
+        continue
     if a != "21":
         print(f"'{a}' Unrecognised. Try again.")
         continue

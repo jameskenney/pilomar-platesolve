@@ -68,5 +68,41 @@ class TestTmuxMount(unittest.TestCase):
         self.assertNotIn("EXIT", self.moves())
 
 
+    def test_goto_via_radec(self):
+        from pilomar_platesolve.catalog import Catalog
+        m = self.mount()
+        m.goto(Catalog().resolve("m31"))
+        self.assertEqual(self.moves(), ["TARGET ra 00 42 44 dec +41 16 09 m31", "GOTO"])
+        self.assertEqual(m._state()[0], "main")
+
+    def test_answers_no_to_shutdown_question(self):
+        m = self.mount()
+        subprocess.run(["tmux", "send-keys", "-t", SESSION, "x", "Enter"], check=True)
+        time.sleep(0.5)
+        self.assertEqual(m._state()[0], "shutdown_question")
+        m.apply(Correction(0.5, 0, 533, 0))
+        self.assertEqual(self.moves(), ["TUNE Azimuth 533"])
+        self.assertEqual(m._state()[0], "main")
+
+    def test_backs_out_of_radec_prompt(self):
+        m = self.mount()
+        for k in ("1", "11"):
+            subprocess.run(["tmux", "send-keys", "-t", SESSION, k, "Enter"], check=True)
+            time.sleep(0.4)
+        self.assertEqual(m._state()[0], "radec_prompt")
+        m.ensure_main_menu()
+        self.assertEqual(m._state()[0], "main")
+        self.assertEqual(self.moves(), [])
+
+
+class TestRadecDefinition(unittest.TestCase):
+    def test_format(self):
+        from pilomar_platesolve.catalog import Catalog, Target
+        self.assertEqual(TmuxMount.radec_definition(Catalog().resolve("m42")),
+                         "ra 05 35 17 dec -05 23 28 m42")
+        t = Target("x y!", "", 359.99999, -0.0001)
+        self.assertEqual(TmuxMount.radec_definition(t), "ra 00 00 00 dec -00 00 00 xy")
+
+
 if __name__ == "__main__":
     unittest.main()

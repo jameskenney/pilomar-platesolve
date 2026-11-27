@@ -268,3 +268,21 @@ def apply_model_correction(target: Target, model: PointingModel, state: Pointing
         return False
     state.add(d_az, d_alt)
     return True
+
+
+class UnsafeTarget(RuntimeError):
+    pass
+
+
+def check_goto_safe(target: Target, site: Site, when: datetime, cfg: dict, min_alt: float = 5.0):
+    """Refuse a GOTO that is below the horizon or too close to the Sun."""
+    alt, _ = astro.j2000_to_altaz(target.ra_deg, target.dec_deg, site, when)
+    if alt < min_alt:
+        raise UnsafeTarget(f"{target.id} is at altitude {alt:.1f}°, below the {min_alt:.0f}° limit")
+    jd = astro.julian_date(when)
+    s_ra, s_dec = astro.date_to_j2000(*astro.sun_radec_of_date(jd), jd)
+    sep = astro.angular_separation(target.ra_deg, target.dec_deg, s_ra, s_dec)
+    limit = float(cfg.get("sun_avoid_deg", 30.0))
+    if sep < limit:
+        raise UnsafeTarget(f"{target.id} is only {sep:.0f}° from the Sun (limit {limit:.0f}°)")
+    return alt, sep

@@ -242,6 +242,10 @@ pilomar-ps goto m31                    # GOTO + model correction, no picture
 pilomar-ps model show|fit|reset        # inspect, refine or clear the model
 pilomar-ps simulate-align              # test alignment on a virtual tilted mount
 pilomar-ps report                      # summary of your test results to copy and share
+pilomar-ps selftest                    # indoor: real solver on synthetic star pictures
+pilomar-ps selftest --center           # indoor: centring loop, virtual mount, real solver
+pilomar-ps capture --exposure 0.01     # take one picture (camera check)
+pilomar-ps tune --az 1 --dry-run       # one Tune move through the configured mount mode
 pilomar-ps config                      # show all settings
 ```
 
@@ -255,10 +259,18 @@ Targets can be Messier or NGC numbers (`m31`, `M 31`, `NGC 7000`), names
 | 1. Software | `python3 -m unittest discover -s tests` | any computer |
 | 2. Whole loop | `pilomar-ps simulate m31` (try `--wrong-sign`, `--fail 1`) | any computer |
 | 2b. Alignment | `pilomar-ps simulate-align` (try `--an 2 --aw -1`) | any computer |
-| 3. Solver | `pilomar-ps solve` on a star picture you've already taken | Pi, no sky |
+| 3. Solver, indoors | `pilomar-ps selftest`, then `pilomar-ps selftest --center` | Pi, no sky |
+| 3b. Solver, real picture | `pilomar-ps solve` on a star picture you've already taken | Pi, no sky |
 | 4. Live, by hand | `pilomar-ps center <target>` with `advisor` | clear night |
 | 4b. Alignment | `pilomar-ps align`, then `goto` + `center` to check how close it lands | clear night |
 | 5. Hands-free | `mount.backend = "tmux"`, first with `--dry-run` | clear night |
+
+**Indoor self-test.** `selftest` draws the real sky from the Hipparcos catalogue
+Pi-lomar already downloads (`data/hip_main.dat`), exactly as your lens would see
+it at a known pointing and rotation. It runs the real plate solver on that picture
+and checks the centre, rotation and scale against the right answer. `--center` runs
+the whole centring loop the same way, with a virtual mount. No sky, camera or
+motors needed, so it can run in daylight, even with Pi-lomar running.
 
 **Before trusting `tmux` mode**, check one thing by hand: in Pi-lomar, Motor
 tools (21) → 4 should ask *"Azimuth steps to move (+/-), 'x' to exit"*, and 5 the
@@ -294,6 +306,7 @@ match yours.
 | Feature | Status |
 |---|---|
 | Unit tests and simulated centring and alignment | ✅ Passing (also run automatically on GitHub) |
+| Indoor self-test on the Pi (real solver, synthetic sky) | ⏳ Not yet tested |
 | Plate solving real images on the Pi | ⏳ Not yet tested |
 | Live centring, advisor mode | ⏳ Not yet tested |
 | Startup alignment and model GOTO | ⏳ Not yet tested |
@@ -343,6 +356,8 @@ pilomar_platesolve/
   catalog.py        target lookup (Pi-lomar's catalogue + built-in list)
   pilomar_bridge.py the only file that knows about Pi-lomar (read-only)
   sim.py            virtual sky/mount/solver for testing
+  synthetic.py      synthetic star pictures from the Hipparcos catalogue
+  report.py         shareable test report
   cli.py            the pilomar-ps command
 tests/              unit tests (stdlib unittest)
 docs/HOW_IT_WORKS.md   the maths, for contributors

@@ -12,6 +12,9 @@
     pilomar-ps simulate M31 --az 1.5 --alt -0.8   test the loop without hardware
     pilomar-ps simulate-align            test alignment against a virtual tilted mount
     pilomar-ps report                    test results summary to copy and share
+    pilomar-ps selftest [--center]       indoor test: real solver on synthetic star pictures
+    pilomar-ps capture                   take one picture (camera check)
+    pilomar-ps tune --az 1               send one Tune move (mount check)
 """
 
 from __future__ import annotations
@@ -448,6 +451,136 @@ def cmd_report(cfg, args):
     return 0
 
 
+def _best_time(target, site, start=None):
+    """The time in the next 24 h when the target is highest (for simulated tests)."""
+    from datetime import timedelta
+    start = start or astro.utcnow()
+    times = [start + timedelta(minutes=30 * i) for i in range(48)]
+    return max(times, key=lambda t: astro.j2000_to_altaz(target.ra_deg, target.dec_deg, site, t)[0])
+
+
+def cmd_selftest(cfg, args):
+    import math
+    import random
+    from datetime import datetime as _dt
+
+    from .synthetic import SyntheticSource, load_hipparcos, render_starfield
+    cat_path = Path(args.catalog or Path(cfg["pilomar_root"]) / "data" / "hip_main.dat")
+    if not cat_path.exists():
+        sys.exit(f"error: star catalogue not found at {cat_path} (Pi-lomar downloads it as hip_main.dat)")
+    solver = make_solver(cfg, _workdir(cfg))
+    if not solver.available():
+        sys.exit("error: plate solver not installed; run ./install.sh")
+    t0 = time.monotonic()
+    stars = load_hipparcos(cat_path, args.max_mag)
+    print(f"Loaded {len(stars)} stars brighter than magnitude {args.max_mag} "
+          f"in {time.monotonic() - t0:.1f} s")
+    o = cfg["optics"]
+    width = args.width
+    height = round(width * o["sensor_height_mm"] / o["sensor_width_mm"])
+    fov = expected_fov_width(cfg)
+    scale = fov * 3600.0 / width
+    outdir = Path(cfg["data_dir"]) / "selftest"
+    outdir.mkdir(parents=True, exist_ok=True)
+    log = Logbook(cfg["data_dir"])
+    rng = random.Random(args.seed)
+    print(f"Synthetic pictures: {width} x {height} px, {scale:.1f}\"/px, {fov:.1f}° wide "
+          f"({o['focal_length_mm']} mm lens)\n")
+
+    ok_all = True
+    if not args.center:
+        print(f"  {'target':8} {'solve':>7} {'centre err':>11} {'rotation err':>13} {'scale err':>10}  result")
+        for name in args.targets.split(","):
+            tgt = _target(cfg, name.strip())
+            # Pretend Pi-lomar missed by up to ~1.5 degrees, camera at a random angle.
+            ra = tgt.ra_deg + rng.uniform(-1.5, 1.5) / max(0.2, math.cos(math.radians(tgt.dec_deg)))
+            dec = max(-89.0, min(89.0, tgt.dec_deg + rng.uniform(-1.5, 1.5)))
+            rot = rng.uniform(0, 360)
+            img = outdir / f"selftest_{tgt.id}.png"
+            truth = render_starfield(stars, ra, dec, rot, width, height, scale, img,
+                                     seed=rng.randrange(1 << 30), limit_mag=args.max_mag)
+            hint = SolveHint(tgt.ra_deg, tgt.dec_deg, float(cfg["solver"]["search_radius_deg"]), fov)
+            try:
+                sol = solve_with_fallback(solver, img, hint, True)
+            except SolveError as e:
+                ok_all = False
+                print(f"  {tgt.id:8} {'-':>7} {'-':>11} {'-':>13} {'-':>10}  NOT SOLVED "
+                      f"({truth['stars']} stars drawn): {e}")
+                log.event("solve_cmd_failed", selftest=True, target=tgt.id, error=str(e))
+                continue
+            c_err = astro.angular_separation(ra, dec, sol.ra_deg, sol.dec_deg) * 3600
+            r_err = abs(astro.wrap180(sol.rotation_deg - rot))
+            s_err = abs(sol.scale_arcsec - scale) / scale * 100
+            good = c_err < 3 * scale and r_err < 0.5 and s_err < 1 and not sol.flipped
+            ok_all &= good
+            print(f"  {tgt.id:8} {sol.solve_seconds:6.1f}s {c_err:9.1f}\" {r_err:11.2f}° {s_err:9.2f}%  "
+                  + ("OK" if good else "CHECK") + ("  [solver says mirrored]" if sol.flipped else ""))
+            log.event("solve_cmd", selftest=True, target=tgt.id, solution=sol.to_dict(),
+                      truth={"ra": ra, "dec": dec, "rotation": rot},
+                      error_arcsec=c_err, rotation_error_deg=r_err)
+        print(f"\n  Pictures and solver logs: {outdir}  and  {_workdir(cfg)}")
+        print("  " + ("PASS: the plate solver works on this Pi." if ok_all else
+                      "Some checks failed; paste this output to get help."))
+        return 0 if ok_all else 1
+
+    # --center: whole centring loop with a virtual mount but the REAL solver.
+    from .sim import SimWorld
+    tgt = _target(cfg, args.targets.split(",")[0].strip())
+    site = _site(cfg)
+    when = _best_time(tgt, site)
+    alt, az = astro.j2000_to_altaz(tgt.ra_deg, tgt.dec_deg, site, when)
+    print(f"Centring test on {tgt.id} as it will be at {when:%Y-%m-%d %H:%M} UTC "
+          f"(altitude {alt:.0f}°), virtual mount off by az {args.az:+.1f}°, alt {args.alt:+.1f}°")
+    mount = SimulatedMount(cfg["mount"], args.az, args.alt, 0.05)
+    world = SimWorld(tgt, site, when, mount, seconds_per_picture=60, noise_deg=0.0)
+    source = SyntheticSource(world, stars, outdir, width, height, scale, rotation_deg=rng.uniform(0, 360))
+    log.event("start", command="center", target=tgt.id, mount="simulated (selftest)")
+    t_start = time.monotonic()
+    res = center_target(tgt, cfg=cfg, site=site, source=source, solver=solver, mount=mount, log=log,
+                        sleep=lambda s: None)
+    log.event("end", success=res.success, reason=res.reason, final_error=res.final_error)
+    print(f"\n  total time: {time.monotonic() - t_start:.0f} s, {len(res.iterations)} picture(s)")
+    print("  " + ("PASS: capture -> solve -> correct loop works with the real solver." if res.success
+                  else "FAILED: paste this output to get help."))
+    return 0 if res.success else 1
+
+
+def cmd_capture(cfg, args):
+    if pilomar_running():
+        print("note: Pi-lomar is running; if it holds the camera this will fail. "
+              "Disable Pi-lomar's camera (Camera tools) or close Pi-lomar first.")
+    rc = dict(cfg["capture"]["rpicam"])
+    if args.exposure:
+        rc["exposure_s"] = args.exposure
+    if args.gain:
+        rc["gain"] = args.gain
+    src = RpicamSource(rc, Path(cfg["data_dir"]) / "captures")
+    if not src.available():
+        sys.exit("error: rpicam-still not found")
+    t0 = time.monotonic()
+    try:
+        path, when = src.capture()
+    except CaptureError as e:
+        sys.exit(f"error: {e}")
+    from .wcs import image_size
+    w, h = image_size(path)
+    print(f"Captured {path} ({w} x {h} px, {path.stat().st_size // 1024} KB) in {time.monotonic() - t0:.1f} s")
+    return 0
+
+
+def cmd_tune(cfg, args):
+    mount = _make_mount(cfg, args)
+    corr = mount.to_steps(args.az, args.alt)
+    print(f"Tune: azimuth {args.az:+.3f}° = {corr.az_steps:+d} steps, "
+          f"altitude {args.alt:+.3f}° = {corr.alt_steps:+d} steps")
+    if not mount.apply(corr):
+        return 1
+    if not args.dry_run:
+        _, state = _load_model(cfg)
+        state.add(args.az, args.alt)
+    return 0
+
+
 def cmd_config(cfg, args):
     if args.write_example:
         dest = config_path()
@@ -519,6 +652,26 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("model", help="show, refit or clear the pointing model")
     s.add_argument("action", choices=["show", "fit", "reset"])
 
+    s = sub.add_parser("selftest", help="indoor test: real solver on synthetic star pictures")
+    s.add_argument("--targets", default="m31,m42,m13,m81", help="comma-separated targets")
+    s.add_argument("--center", action="store_true", help="run the centring loop (virtual mount, real solver)")
+    s.add_argument("--az", type=float, default=1.5, help="--center: starting azimuth error")
+    s.add_argument("--alt", type=float, default=-0.8, help="--center: starting altitude error")
+    s.add_argument("--width", type=int, default=1014, help="synthetic picture width in pixels")
+    s.add_argument("--max-mag", type=float, default=8.0, help="faintest star to draw")
+    s.add_argument("--catalog", help="path to hip_main.dat (default: Pi-lomar's data folder)")
+    s.add_argument("--seed", type=int, default=7)
+
+    s = sub.add_parser("capture", help="take one picture with rpicam-still (camera check)")
+    s.add_argument("--exposure", type=float, help="seconds (e.g. 0.01 indoors in daylight)")
+    s.add_argument("--gain", type=float)
+
+    s = sub.add_parser("tune", help="send one Tune move through the configured mount mode")
+    s.add_argument("--az", type=float, default=0.0, help="degrees")
+    s.add_argument("--alt", type=float, default=0.0, help="degrees")
+    s.add_argument("--mount", choices=["advisor", "tmux"])
+    s.add_argument("--dry-run", action="store_true")
+
     s = sub.add_parser("report", help="summary of test results to copy and share (no personal details)")
     s.add_argument("--since", help="only include runs from this date, e.g. 2026-12-01")
 
@@ -552,7 +705,8 @@ def build_parser() -> argparse.ArgumentParser:
 COMMANDS = {"check": cmd_check, "solve": cmd_solve, "target": cmd_target, "suggest": cmd_suggest,
             "center": cmd_center, "watch": cmd_watch, "simulate": cmd_simulate, "config": cmd_config,
             "align": cmd_align, "goto": cmd_goto, "model": cmd_model,
-            "simulate-align": cmd_simulate_align, "report": cmd_report}
+            "simulate-align": cmd_simulate_align, "report": cmd_report,
+            "selftest": cmd_selftest, "capture": cmd_capture, "tune": cmd_tune}
 
 
 def main(argv=None) -> int:

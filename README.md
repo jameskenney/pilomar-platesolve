@@ -292,25 +292,27 @@ match yours.
 | Part | Reference build |
 |---|---|
 | Computer | Raspberry Pi 5, 8 GB RAM, 64 GB microSD |
-| Operating system | Raspberry Pi OS (Legacy, 64-bit), Debian Bookworm |
+| Operating system | Raspberry Pi OS (Legacy, 64-bit), Debian Bookworm, Python 3.11 |
 | Pi-lomar software | 1.3.0 ([Short-bus/pilomar](https://github.com/Short-bus/pilomar)) |
 | Motor controller | Raspberry Pi Pico 2 running CircuitPython 10.3.2, following the [Pi-lomar TMC2209 + Pico 2 controller upgrade](https://www.instructables.com/Pi-lomar-TMC2209-Pico2-Motor-Controller-Upgrade/) |
 | Motor drivers | 2 × BigTreeTech TMC2209 V1.3, 1/4 microstepping |
 | Motors | 2 × StepperOnline 17HM19-2004S (0.9° per step) |
 | Gearing | 60:1 worm gear, then a 4:1 final drive (384,000 steps per turn at 1/4 microstepping) |
 | Camera | Raspberry Pi HQ camera (IMX477) with a 16 mm C-mount lens (about 22° × 17° field) |
-| Plate solver | astrometry.net from apt, with `astrometry-data-2mass-08-19` index files |
+| Plate solver | astrometry.net 0.93 from apt, with `astrometry-data-2mass-08-19` index files (index-2mass-11 to 19 are enough for a 16 mm lens) |
 
 ### Test status
 
 | Feature | Status |
 |---|---|
-| Unit tests and simulated centring and alignment | ✅ Passing (also run automatically on GitHub) |
-| Indoor self-test on the Pi (real solver, synthetic sky) | ⏳ Not yet tested |
-| Plate solving real images on the Pi | ⏳ Not yet tested |
-| Live centring, advisor mode | ⏳ Not yet tested |
+| Unit tests and simulated centring and alignment | ✅ Passing on the Pi and on GitHub |
+| Plate solver on the Pi, synthetic sky (`selftest`) | ✅ 27 Nov 2026: 7 of 7 solved, 1.5–2.1 s each, centre within 2–14″ (a fraction of a 79″ pixel), rotation within 0.02°, scale within 0.01% |
+| Centring loop, real solver + virtual mount (`selftest --center`) | ✅ 27 Nov 2026: 0.82° → 0.015° in 3 pictures, 6 s |
+| Camera capture (`capture`) | ✅ 27 Nov 2026: 2028 × 1520 picture in 0.6 s |
+| Automatic Tune through tmux | ✅ 27 Nov 2026: menu keys checked against Pi-lomar 1.3.0; ±5° azimuth and altitude moved the right way and returned |
+| Plate solving real night-sky pictures | ⏳ Not yet tested |
+| Live centring under the sky | ⏳ Not yet tested |
 | Startup alignment and model GOTO | ⏳ Not yet tested |
-| Automatic Tune through tmux | ⏳ Checked only against a stand-in for Pi-lomar's menus |
 
 After testing, run `pilomar-ps report`. It prints your hardware, software
 versions, solve times, centring accuracy and alignment results as one block,
@@ -323,7 +325,9 @@ this table can grow.
 ## Known limitations
 
 * `tmux` mode sends keystrokes, so it depends on Pi-lomar's menu layout. The
-  defaults follow Pi-lomar 1.3.0 and still need checking on real hardware.
+  defaults are checked against Pi-lomar 1.3.0; a future Pi-lomar release that
+  renumbers Motor tools would need `mount.tmux.tune_keys` updating. Pi-lomar must be
+  at its main menu when a correction is sent.
 * With `pilomar-folder`, *you* trigger the picture in Pi-lomar unless you set
   `mount.tmux.capture_keys`.
 * Near the zenith, alt-az mounts need large azimuth moves for small sky offsets.

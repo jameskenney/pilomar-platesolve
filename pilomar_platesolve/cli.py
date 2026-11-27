@@ -16,6 +16,7 @@
     pilomar-ps capture                   take one picture (camera check)
     pilomar-ps tune --az 1               send one Tune move (mount check)
     pilomar-ps slew M31 | --altaz 10 190 have Pi-lomar GOTO (no correction)
+    pilomar-ps focus                     star size every few seconds, for focusing
 """
 
 from __future__ import annotations
@@ -614,6 +615,50 @@ def cmd_slew(cfg, args):
     return 0 if ok else 1
 
 
+def cmd_focus(cfg, args):
+    from .focus import FocusError, bar, capture_bmp, measure_stars, read_bmp_gray
+    if pilomar_running():
+        print("note: Pi-lomar is running; its camera must be disabled for this to work.")
+    out = Path(cfg["data_dir"]) / "focus" / "focus.bmp"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    roi = None if args.full else "0.375,0.375,0.25,0.25"
+    w, h = (1014, 760)
+    print(f"Focus helper: {args.exposure:g} s exposures at gain {args.gain:g}, "
+          f"{'whole picture' if args.full else 'centre of the picture'}.")
+    print("Turn the focus ring slowly between readings; smaller star size = sharper. Ctrl+C to stop.\n")
+    best, n = None, 0
+    try:
+        while args.count == 0 or n < args.count:
+            n += 1
+            try:
+                capture_bmp(cfg["capture"]["rpicam"], out, args.exposure, args.gain, roi, w, h)
+                res = measure_stars(*read_bmp_gray(out))
+            except FocusError as e:
+                print(f"#{n:<3} error: {e}")
+                if n == 1:
+                    return 2
+                time.sleep(2)
+                continue
+            if res.hfr is None:
+                hint = ("sky still too bright?" if res.background > 120 else
+                        "not dark enough yet, try --exposure 4, or focus is far off")
+                print(f"#{n:<3} no stars found (background {res.background:.0f}/255): {hint}")
+            else:
+                best = res.hfr if best is None else min(best, res.hfr)
+                mark = "  <- best so far" if res.hfr <= best else ""
+                print(f"#{n:<3} stars {res.stars:4d}   size {res.hfr:5.2f} px   "
+                      f"[{bar(res.hfr, best)}]   best {best:.2f}{mark}"
+                      + (f"   ({res.saturated} saturated)" if res.saturated else ""))
+            if args.interval:
+                time.sleep(args.interval)
+    except KeyboardInterrupt:
+        pass
+    if best is not None:
+        print(f"\nBest star size: {best:.2f} px. Turn back to where it read lowest, "
+              "then tighten the focus lock screw.")
+    return 0
+
+
 def cmd_config(cfg, args):
     if args.write_example:
         dest = config_path()
@@ -712,6 +757,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--mount", choices=["advisor", "tmux"])
     s.add_argument("--dry-run", action="store_true")
 
+    s = sub.add_parser("focus", help="focus helper: star size every few seconds (works over SSH)")
+    s.add_argument("--exposure", type=float, default=1.0, help="seconds (default 1)")
+    s.add_argument("--gain", type=float, default=8.0)
+    s.add_argument("--full", action="store_true", help="use the whole picture, not the centre")
+    s.add_argument("--count", type=int, default=0, help="stop after N readings (default: until Ctrl+C)")
+    s.add_argument("--interval", type=float, default=0.0, help="extra pause between readings")
+
     s = sub.add_parser("report", help="summary of test results to copy and share (no personal details)")
     s.add_argument("--since", help="only include runs from this date, e.g. 2026-12-01")
 
@@ -747,7 +799,7 @@ COMMANDS = {"check": cmd_check, "solve": cmd_solve, "target": cmd_target, "sugge
             "align": cmd_align, "goto": cmd_goto, "model": cmd_model,
             "simulate-align": cmd_simulate_align, "report": cmd_report,
             "selftest": cmd_selftest, "capture": cmd_capture, "tune": cmd_tune,
-            "slew": cmd_slew}
+            "slew": cmd_slew, "focus": cmd_focus}
 
 
 def main(argv=None) -> int:

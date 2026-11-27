@@ -247,6 +247,7 @@ pilomar-ps selftest --center           # indoor: centring loop, virtual mount, r
 pilomar-ps capture --exposure 0.01     # take one picture (camera check)
 pilomar-ps tune --az 1 --dry-run       # one Tune move through the configured mount mode
 pilomar-ps slew --altaz 10 190         # have Pi-lomar GOTO (test); refuses below 5° or near the Sun
+pilomar-ps focus                       # star size every few seconds: focus over SSH, smaller = sharper
 pilomar-ps config                      # show all settings
 ```
 

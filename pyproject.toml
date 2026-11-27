@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pilomar-platesolve"
-version = "0.3.2"
+version = "0.3.3"
 description = "Plate solving and automatic target centring for the Pi-lomar miniature observatory"
 readme = "README.md"
 license = { text = "MIT" }

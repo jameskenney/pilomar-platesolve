@@ -6,7 +6,11 @@
     pilomar-ps suggest                   good deep-sky targets right now
     pilomar-ps center M31                capture -> solve -> correct until centred
     pilomar-ps watch [--target M31]      solve every new Pi-lomar picture
+    pilomar-ps align                     startup alignment: measure the mount's errors
+    pilomar-ps goto M31                  GOTO + model correction, no picture needed
+    pilomar-ps model show|fit|reset      inspect or rebuild the pointing model
     pilomar-ps simulate M31 --az 1.5 --alt -0.8   test the loop without hardware
+    pilomar-ps simulate-align            test alignment against a virtual tilted mount
 """
 
 from __future__ import annotations
@@ -26,6 +30,9 @@ from .catalog import Catalog
 from .centering import (Logbook, center_target, expected_fov_width, pointing_error,
                         solve_with_fallback)
 from .config import DEFAULTS, config_path, load_config
+from .align import choose_alignment_targets, run_alignment, samples_from_log
+from .centering import apply_model_correction
+from .model import PointingModel, PointingState, fit_model
 from .mount import AdvisorMount, SimulatedMount, TmuxMount
 from .pilomar_bridge import newest_image, pilomar_running, site_from_config
 from .solvers import SolveError, SolveHint, make_solver
@@ -49,6 +56,19 @@ def _workdir(cfg) -> Path:
     p = Path(cfg["data_dir"]) / "work"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _model_paths(cfg) -> tuple[Path, Path]:
+    d = Path(cfg["data_dir"])
+    return d / "pointing_model.json", d / "pointing_state.json"
+
+
+def _load_model(cfg, args=None) -> tuple[PointingModel | None, PointingState]:
+    mp, sp = _model_paths(cfg)
+    state = PointingState(sp)
+    if args is not None and getattr(args, "dry_run", False):
+        state.path = None  # dry run: never write the ledger
+    return PointingModel.load(mp), state
 
 
 def _parse_time(s: str | None) -> datetime | None:
@@ -217,9 +237,16 @@ def cmd_center(cfg, args):
     source = _make_source(cfg, args, mount)
     log = Logbook(cfg["data_dir"])
     log.event("start", target=asdict(target), site=asdict(site), mount=mount.name)
+    model, state = _load_model(cfg, args)
+    if args.no_model or args.image:
+        model = None
+    elif model:
+        print(f"Using pointing model fitted {model.fitted_at[:16]} "
+              f"({model.rms_after_deg:.2f}° rms).")
     try:
         res = center_target(target, cfg=cfg, site=site, source=source,
-                            solver=make_solver(cfg, _workdir(cfg)), mount=mount, log=log)
+                            solver=make_solver(cfg, _workdir(cfg)), mount=mount, log=log,
+                            model=model, state=state)
     except (CaptureError, RuntimeError) as e:
         print(f"error: {e}")
         return 3
@@ -293,6 +320,111 @@ def cmd_simulate(cfg, args):
     return 0 if res.success else 1
 
 
+def cmd_align(cfg, args):
+    site = _site(cfg)
+    now = _parse_time(args.time) or astro.utcnow()
+    cat = Catalog(cfg["pilomar_root"])
+    if args.targets:
+        targets = [_target(cfg, n) for n in args.targets.split(",")]
+    else:
+        targets = choose_alignment_targets(cat.all(), site, now, args.points)
+    if len(targets) < 3:
+        sys.exit("error: fewer than 3 usable targets above the horizon; try --targets")
+    print("Alignment: Pi-lomar will visit these targets. Make NO manual Tune moves meanwhile.")
+    for t in targets:
+        alt, az = astro.j2000_to_altaz(t.ra_deg, t.dec_deg, site, now)
+        print(f"  {t.id:8} az {az:6.1f}°  alt {alt:5.1f}°  {t.name}")
+    mount = _make_mount(cfg, args)
+    source = _make_source(cfg, args, mount)
+    _, state = _load_model(cfg, args)
+    log = Logbook(cfg["data_dir"])
+    try:
+        model, samples = run_alignment(targets, cfg=cfg, site=site, source=source,
+                                       solver=make_solver(cfg, _workdir(cfg)), mount=mount,
+                                       state=state, log=log)
+    except (CaptureError, RuntimeError) as e:
+        print(f"error: {e}")
+        return 3
+    except KeyboardInterrupt:
+        print("\nstopped")
+        return 130
+    if model is None:
+        return 1
+    mp, _ = _model_paths(cfg)
+    if args.dry_run:
+        print("\n(dry run: model not saved)\n" + model.describe())
+        return 0
+    model.save(mp)
+    log.event("model_fitted", model=model.to_dict())
+    print("\nPointing model saved to " + str(mp) + "\n" + model.describe())
+    if model.rms_after_deg > 0.5:
+        print("  note: large leftover error; check for backlash, a loose mount, or a bad solve")
+    return 0
+
+
+def cmd_goto(cfg, args):
+    target = _target(cfg, args.name)
+    site = _site(cfg)
+    model, state = _load_model(cfg, args)
+    if model is None:
+        sys.exit("error: no pointing model yet; run 'pilomar-ps align' first")
+    alt, _ = astro.j2000_to_altaz(target.ra_deg, target.dec_deg, site, astro.utcnow())
+    if alt < 5:
+        sys.exit(f"error: {target.id} is below the horizon")
+    mount = _make_mount(cfg, args)
+    if not args.no_slew and not mount.goto(target):
+        return 1
+    ok = apply_model_correction(target, model, state, site, mount, cfg, astro.utcnow())
+    if ok:
+        print(f"  {target.id} should now be centred to within about {max(model.rms_after_deg, 0.05) * 2:.1f}°."
+              " Use 'pilomar-ps center' to confirm with a picture.")
+    return 0 if ok else 1
+
+
+def cmd_model(cfg, args):
+    mp, sp = _model_paths(cfg)
+    model, state = _load_model(cfg)
+    if args.action == "show":
+        if not model:
+            print("No pointing model yet. Run 'pilomar-ps align'.")
+        else:
+            print(f"Pointing model ({mp}), fitted {model.fitted_at}:\n{model.describe()}")
+            print(f"  Tune applied since then: azimuth {state.tune_az:+.3f}°, altitude {state.tune_alt:+.3f}°")
+        return 0
+    if args.action == "fit":
+        samples = samples_from_log(Path(cfg["data_dir"]) / "pointing_log.csv", state.epoch)
+        if len(samples) < 3:
+            sys.exit(f"error: only {len(samples)} usable logged solves since the last alignment")
+        new = fit_model(samples)
+        new.epoch = state.epoch  # same frame as the logged mount positions
+        new.save(mp)
+        print(f"Refitted from {len(samples)} logged solves:\n{new.describe()}")
+        return 0
+    if args.action == "reset":
+        mp.unlink(missing_ok=True)
+        state.reset()
+        print("Pointing model and Tune ledger cleared.")
+        return 0
+    return 1
+
+
+def cmd_simulate_align(cfg, args):
+    from .sim import simulate_alignment
+    try:
+        site = site_from_config(cfg)
+    except RuntimeError:
+        site = astro.Site(35.47, -97.52)
+    start = _parse_time(args.time) or astro.utcnow()
+    truth = PointingModel(params={"IA": args.ia, "IE": args.ie, "AN": args.an,
+                                  "AW": args.aw, "CA": args.ca})
+    print("Virtual mount faults:\n" + truth.describe().split("\n  fitted")[0])
+    model, results = simulate_alignment(cfg, site, start, truth, Catalog(cfg["pilomar_root"]).all(),
+                                        n_points=args.points)
+    worst = max(r[2] for r in results) if results else 99
+    print(f"\nworst error after model correction: {worst:.3f}°")
+    return 0 if worst < 0.25 else 1
+
+
 def cmd_config(cfg, args):
     if args.write_example:
         dest = config_path()
@@ -343,6 +475,35 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--dry-run", action="store_true", help="tmux: print keystrokes, don't send")
     s.add_argument("--tolerance", type=float, help="degrees")
     s.add_argument("--max-iter", type=int)
+    s.add_argument("--no-model", action="store_true", help="ignore the pointing model")
+
+    s = sub.add_parser("align", help="startup alignment: fit the mount's pointing model")
+    s.add_argument("--points", type=int, default=6)
+    s.add_argument("--targets", help="comma-separated targets instead of automatic choice")
+    s.add_argument("--mount", choices=["advisor", "tmux"])
+    s.add_argument("--source", choices=["rpicam", "pilomar-folder"])
+    s.add_argument("--image", help=argparse.SUPPRESS)
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--time")
+
+    s = sub.add_parser("goto", help="GOTO a target and correct it with the pointing model")
+    s.add_argument("name")
+    s.add_argument("--no-slew", action="store_true",
+                   help="Pi-lomar is already on the target; just re-apply the correction")
+    s.add_argument("--mount", choices=["advisor", "tmux"])
+    s.add_argument("--dry-run", action="store_true")
+
+    s = sub.add_parser("model", help="show, refit or clear the pointing model")
+    s.add_argument("action", choices=["show", "fit", "reset"])
+
+    s = sub.add_parser("simulate-align", help="test alignment on a virtual mount with known faults")
+    s.add_argument("--ia", type=float, default=1.2, help="azimuth home offset, degrees")
+    s.add_argument("--ie", type=float, default=-0.6, help="altitude zero offset")
+    s.add_argument("--an", type=float, default=0.5, help="base tilt north-south")
+    s.add_argument("--aw", type=float, default=-0.7, help="base tilt east-west")
+    s.add_argument("--ca", type=float, default=0.3, help="camera sideways offset")
+    s.add_argument("--points", type=int, default=6)
+    s.add_argument("--time")
 
     s = sub.add_parser("watch", help="solve each new Pi-lomar image as it is saved")
     s.add_argument("--target")
@@ -363,7 +524,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = {"check": cmd_check, "solve": cmd_solve, "target": cmd_target, "suggest": cmd_suggest,
-            "center": cmd_center, "watch": cmd_watch, "simulate": cmd_simulate, "config": cmd_config}
+            "center": cmd_center, "watch": cmd_watch, "simulate": cmd_simulate, "config": cmd_config,
+            "align": cmd_align, "goto": cmd_goto, "model": cmd_model,
+            "simulate-align": cmd_simulate_align}
 
 
 def main(argv=None) -> int:

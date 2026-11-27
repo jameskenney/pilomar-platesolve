@@ -13,6 +13,7 @@ from pathlib import Path
 from . import astro
 from .astro import Site, wrap180
 from .catalog import Target
+from .model import PointingModel, PointingState, predicted_correction
 from .mount import Mount
 from .solvers import SolveError, SolveHint, Solver
 from .wcs import PlateSolution
@@ -97,19 +98,29 @@ class Logbook:
         with open(self.session, "a", encoding="utf-8") as f:
             f.write(json.dumps({"t": datetime.now().isoformat(), "event": kind, **data}, default=str) + "\n")
 
-    def pointing(self, target: Target, sol: PlateSolution, err: PointingError):
+    HEADER = ["utc", "target", "target_ra", "target_dec", "solved_ra", "solved_dec",
+              "target_alt", "target_az", "actual_alt", "actual_az", "d_alt", "d_az",
+              "separation", "rotation", "scale_arcsec", "image", "mount_alt", "mount_az", "epoch"]
+
+    def pointing(self, target: Target, sol: PlateSolution, err: PointingError,
+                 state: PointingState | None = None):
+        if self.csv.exists():
+            with open(self.csv, encoding="utf-8") as f:
+                if f.readline().strip().split(",") != self.HEADER:
+                    self.csv.rename(self.csv.with_name("pointing_log_old.csv"))
         new = not self.csv.exists()
+        m_az, m_alt = (state.mount_position(err.target_az, err.target_alt) if state
+                       else (err.target_az, err.target_alt))
         with open(self.csv, "a", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             if new:
-                w.writerow(["utc", "target", "target_ra", "target_dec", "solved_ra", "solved_dec",
-                            "target_alt", "target_az", "actual_alt", "actual_az", "d_alt", "d_az",
-                            "separation", "rotation", "scale_arcsec", "image"])
+                w.writerow(self.HEADER)
             w.writerow([err.when, target.id, f"{target.ra_deg:.5f}", f"{target.dec_deg:.5f}",
                         f"{sol.ra_deg:.5f}", f"{sol.dec_deg:.5f}", f"{err.target_alt:.4f}",
                         f"{err.target_az:.4f}", f"{err.actual_alt:.4f}", f"{err.actual_az:.4f}",
                         f"{err.d_alt_deg:.4f}", f"{err.d_az_deg:.4f}", f"{err.separation_deg:.4f}",
-                        f"{sol.rotation_deg:.2f}", f"{sol.scale_arcsec:.3f}", sol.image])
+                        f"{sol.rotation_deg:.2f}", f"{sol.scale_arcsec:.3f}", sol.image,
+                        f"{m_alt:.4f}", f"{m_az:.4f}", state.epoch if state else ""])
 
 
 def expected_fov_width(cfg: dict) -> float:
@@ -130,15 +141,24 @@ def solve_with_fallback(solver: Solver, image, hint: SolveHint, blind_retry: boo
 
 def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solver,
                   mount: Mount, log: Logbook | None = None, verbose: bool = True,
-                  sleep=time.sleep) -> CenterResult:
-    """The centring loop: picture -> solve -> compare -> Tune -> repeat."""
+                  sleep=time.sleep, model: PointingModel | None = None,
+                  state: PointingState | None = None, when=None) -> CenterResult:
+    """The centring loop: [model correction] -> picture -> solve -> compare -> Tune -> repeat."""
     c = cfg["centering"]
+    state = state or PointingState(None)
     tol = float(c["tolerance_deg"])
     result = CenterResult(target=asdict(target), success=False, reason="")
     hint = SolveHint(target.ra_deg, target.dec_deg, float(cfg["solver"]["search_radius_deg"]),
                      expected_fov_width(cfg))
     say = print if verbose else (lambda *a, **k: None)
     prev_sep, strikes = None, 0
+
+    if model is not None and model.params:
+        if not apply_model_correction(target, model, state, site, mount, cfg,
+                                      when or astro.utcnow(), say, log):
+            result.reason = "stopped by user"
+            return result
+        sleep(float(c["settle_s"]))
 
     for n in range(1, int(c["max_iterations"]) + 1):
         say(f"\n[{n}] Capturing...")
@@ -159,7 +179,7 @@ def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solv
         it = Iteration(n, str(image), sol.to_dict(), asdict(err))
         result.iterations.append(it)
         if log:
-            log.pointing(target, sol, err)
+            log.pointing(target, sol, err, state)
             log.event("solved", n=n, solution=sol.to_dict(), error=asdict(err))
 
         # Use the latest solution as the next hint: faster solves.
@@ -187,10 +207,10 @@ def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solv
         if err.target_alt > float(c["zenith_warn_alt_deg"]):
             say("    note: target is near the zenith, azimuth corrections become large there")
 
-        lim = float(c["max_correction_deg"])
         gain = float(c["gain"])
-        d_az = max(-lim, min(lim, err.d_az_deg * gain))
-        d_alt = max(-lim, min(lim, err.d_alt_deg * gain))
+        d_az, d_alt = clamp_on_sky(err.d_az_deg * gain, err.d_alt_deg * gain,
+                                   err.target_alt, float(c["max_correction_deg"]),
+                                   float(c.get("max_azimuth_turn_deg", 30.0)))
         if abs(d_az) < float(c["min_correction_deg"]):
             d_az = 0.0
         if abs(d_alt) < float(c["min_correction_deg"]):
@@ -202,8 +222,49 @@ def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solv
         if not mount.apply(corr):
             result.reason = "stopped by user"
             return result
+        state.add(corr.d_az_deg, corr.d_alt_deg)
         sleep(float(c["settle_s"]))
 
     result.reason = f"not centred after {c['max_iterations']} pictures"
     say(f"\n  ✘ {result.reason}")
     return result
+
+
+def clamp_on_sky(d_az: float, d_alt: float, alt: float, limit: float,
+                 max_az_turn: float = 30.0) -> tuple[float, float]:
+    """Limit a correction by how far it moves the view on the sky, not by raw azimuth.
+
+    Near the zenith a small sky offset needs a large azimuth turn
+    (azimuth degrees shrink by cos(altitude)), so a raw-azimuth limit would
+    wrongly cut legitimate corrections short there.
+    """
+    import math
+    sky = math.hypot(d_az * math.cos(math.radians(alt)), d_alt)
+    if sky > limit:
+        f = limit / sky
+        d_az, d_alt = d_az * f, d_alt * f
+    # Right at the zenith azimuth is barely defined, so also cap the turn itself;
+    # the loop simply takes another picture and continues.
+    return max(-max_az_turn, min(max_az_turn, d_az)), d_alt
+
+
+def apply_model_correction(target: Target, model: PointingModel, state: PointingState,
+                           site: Site, mount: Mount, cfg: dict, when: datetime,
+                           say=print, log: Logbook | None = None) -> bool:
+    """Predict the pointing error from the model and Tune it away, no picture needed."""
+    t_alt, t_az = astro.j2000_to_altaz(target.ra_deg, target.dec_deg, site, when)
+    d_az, d_alt = predicted_correction(model, state, t_az, t_alt)
+    d_az, d_alt = clamp_on_sky(d_az, d_alt, t_alt, float(cfg["centering"]["max_correction_deg"]),
+                               float(cfg["centering"].get("max_azimuth_turn_deg", 30.0)))
+    small = float(cfg["centering"]["min_correction_deg"])
+    if abs(d_az) < small and abs(d_alt) < small:
+        say(f"  Pointing model: no correction needed for {target.id}")
+        return True
+    say(f"  Pointing model predicts: azimuth {d_az:+.3f}°, altitude {d_alt:+.3f}°")
+    corr = mount.to_steps(d_az, d_alt)
+    if log:
+        log.event("model_correction", target=target.id, **asdict(corr))
+    if not mount.apply(corr):
+        return False
+    state.add(d_az, d_alt)
+    return True

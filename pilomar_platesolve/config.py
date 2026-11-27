@@ -63,6 +63,11 @@ DEFAULTS: dict = {
             "tune_keys": ["21", "Enter", "4", "Enter", "{az_steps}", "Enter", "x", "Enter",
                           "5", "Enter", "{alt_steps}", "Enter", "x", "Enter", "x", "Enter"],
             "capture_keys": [],
+            # Optional, UNVERIFIED: keys to select a target and GOTO it, e.g.
+            # ["1", "Enter", "3", "Enter", "{target}", "Enter", "4", "Enter"].
+            # Empty = you do the GOTO in Pi-lomar when asked.
+            "goto_keys": [],
+            "goto_wait_s": 60,       # time allowed for a slew before the next step
         },
     },
 
@@ -70,7 +75,8 @@ DEFAULTS: dict = {
         "tolerance_deg": 0.10,       # stop when the target is this close to centre
         "max_iterations": 6,
         "gain": 0.9,                 # apply 90% of the error: avoids overshoot from backlash
-        "max_correction_deg": 10.0,  # never move more than this in one step
+        "max_correction_deg": 10.0,  # never move the view more than this on the sky in one step
+        "max_azimuth_turn_deg": 30.0,  # and never turn azimuth more than this (zenith safety)
         "min_correction_deg": 0.02,  # ignore smaller corrections on an axis
         "settle_s": 3.0,             # wait after a move before the next picture
         "zenith_warn_alt_deg": 80.0,

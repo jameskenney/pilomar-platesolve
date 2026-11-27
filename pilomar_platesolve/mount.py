@@ -46,6 +46,13 @@ class Mount:
         """Apply a correction. Return False if the user aborted."""
         raise NotImplementedError
 
+    def goto(self, target) -> bool:
+        """Have Pi-lomar slew to a target. Return False if the user aborted."""
+        print(f"\n  >>> In Pi-lomar: select target '{target.id}' and GOTO it (main menu 4).")
+        if not sys.stdin.isatty():
+            return True
+        return input("  Press Enter once it has arrived (or 'q' to stop): ").strip().lower() != "q"
+
 
 class AdvisorMount(Mount):
     name = "advisor"
@@ -110,6 +117,17 @@ class TmuxMount(Mount):
                 subprocess.run(["tmux", "send-keys", "-t", session, "-l", "--", k], check=True)
             time.sleep(delay)
 
+    def goto(self, target) -> bool:
+        keys = self.t.get("goto_keys") or []
+        if not keys:
+            return super().goto(target)
+        print(f"  Sending GOTO {target.id}")
+        self.send([str(k).replace("{target}", target.id) for k in keys])
+        wait = float(self.t.get("goto_wait_s", 60))
+        if not self.dry_run:
+            time.sleep(wait)
+        return True
+
     def trigger_capture(self):
         keys = self.t.get("capture_keys") or []
         if keys:
@@ -125,31 +143,55 @@ class TmuxMount(Mount):
 
 
 class SimulatedMount(Mount):
-    """Pretend mount with a fixed pointing error, in the motor (alt/az) frame."""
+    """Pretend mount. Its errors can be a fixed alt/az offset (err_*) and/or a
+    full mount geometry (a PointingModel of the *true* tilt, offsets etc.)."""
 
     name = "simulated"
 
     def __init__(self, cfg: dict, err_az_deg: float = 0.0, err_alt_deg: float = 0.0,
                  lost_motion_fraction: float = 0.0,
-                 true_az_sign: int | None = None, true_alt_sign: int | None = None):
-        """err_* = where the camera really points minus where Pi-lomar thinks.
-
-        ``true_*_sign`` is how the hardware really responds to +steps; by
+                 true_az_sign: int | None = None, true_alt_sign: int | None = None,
+                 geometry=None):
+        """``true_*_sign`` is how the hardware really responds to +steps; by
         default it matches the config (i.e. the config is right).
         ``lost_motion_fraction`` imitates backlash eating part of each move.
         """
         super().__init__(cfg)
-        self.err_az = err_az_deg
-        self.err_alt = err_alt_deg
+        self.base_az = err_az_deg
+        self.base_alt = err_alt_deg
+        self.geometry = geometry
         self.lost = lost_motion_fraction
         self.true_az_sign = true_az_sign if true_az_sign is not None else int(cfg.get("az_sign", 1))
         self.true_alt_sign = true_alt_sign if true_alt_sign is not None else int(cfg.get("alt_sign", 1))
+        self.tune_az = 0.0   # physical Tune motion so far, degrees
+        self.tune_alt = 0.0
         self.history: list[Correction] = []
+        self.gotos: list = []
+
+    # Remaining fixed error (for the simple constant-offset case).
+    @property
+    def err_az(self) -> float:
+        return self.base_az + self.tune_az
+
+    @property
+    def err_alt(self) -> float:
+        return self.base_alt + self.tune_alt
+
+    def actual_altaz(self, logical_alt: float, logical_az: float) -> tuple[float, float]:
+        """Where the camera really points when Pi-lomar believes (alt, az)."""
+        m_az = logical_az + self.tune_az
+        m_alt = logical_alt + self.tune_alt
+        d_az, d_alt = self.geometry.delta(m_az, m_alt) if self.geometry else (0.0, 0.0)
+        return m_alt + d_alt + self.base_alt, (m_az + d_az + self.base_az) % 360.0
+
+    def goto(self, target) -> bool:
+        self.gotos.append(target)
+        return True
 
     def apply(self, corr: Correction) -> bool:
         self.history.append(corr)
         moved_az = corr.az_steps / float(self.cfg["steps_per_degree_az"]) * self.true_az_sign
         moved_alt = corr.alt_steps / float(self.cfg["steps_per_degree_alt"]) * self.true_alt_sign
-        self.err_az += moved_az * (1 - self.lost)
-        self.err_alt += moved_alt * (1 - self.lost)
+        self.tune_az += moved_az * (1 - self.lost)
+        self.tune_alt += moved_alt * (1 - self.lost)
         return True

@@ -43,7 +43,18 @@ class TestCentering(unittest.TestCase):
         res, mount = run(-14.0, 6.0)
         self.assertTrue(res.success, res.reason)
         first = mount.history[0]
-        self.assertLessEqual(abs(first.d_az_deg), DEFAULTS["centering"]["max_correction_deg"] + 1e-9)
+        self.assertLessEqual(abs(first.d_az_deg), DEFAULTS["centering"]["max_azimuth_turn_deg"] + 1e-9)
+        self.assertLessEqual(abs(first.d_alt_deg), DEFAULTS["centering"]["max_correction_deg"] + 1e-9)
+
+    def test_clamp_on_sky(self):
+        from pilomar_platesolve.centering import clamp_on_sky
+        # Near the zenith a 13 deg azimuth turn is only ~1.4 deg on the sky: allowed.
+        self.assertEqual(clamp_on_sky(13.0, 0.5, 84.0, 10.0), (13.0, 0.5))
+        # A big sky move is scaled down proportionally.
+        d_az, d_alt = clamp_on_sky(0.0, 20.0, 30.0, 10.0)
+        self.assertAlmostEqual(d_alt, 10.0)
+        # Azimuth turn capped regardless.
+        self.assertEqual(clamp_on_sky(90.0, 0.0, 89.5, 10.0)[0], 30.0)
 
     def test_reversed_sign_is_detected(self):
         res, _ = run(1.5, -0.8, true_az_sign=-1)
@@ -73,7 +84,7 @@ class TestCentering(unittest.TestCase):
         world = SimWorld(tgt, SITE, T0, mount, noise_deg=0.0)
         src, solver = SimSource(world), SimSolver(world)
         # Camera aimed 1 degree higher than the target: needs altitude -1.
-        mount.err_alt = 1.0
+        mount.base_alt = 1.0
         img, when = src.capture()
         err = pointing_error(tgt, solver.solve(img), SITE, when)
         self.assertAlmostEqual(err.d_alt_deg, -1.0, places=4)

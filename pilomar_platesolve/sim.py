@@ -32,10 +32,16 @@ class SimWorld:
         self.pointings: dict[str, tuple[float, float]] = {}
         self.count = 0
 
+    def current_target(self) -> Target:
+        """Whatever the mount last slewed to (alignment), else the fixed target."""
+        return self.mount.gotos[-1] if getattr(self.mount, "gotos", None) else self.target
+
     def true_pointing(self, when: datetime) -> tuple[float, float]:
-        alt, az = astro.j2000_to_altaz(self.target.ra_deg, self.target.dec_deg, self.site, when)
-        alt += self.mount.err_alt + self.rng.gauss(0, self.noise)
-        az += self.mount.err_az + self.rng.gauss(0, self.noise)
+        t = self.current_target()
+        alt, az = astro.j2000_to_altaz(t.ra_deg, t.dec_deg, self.site, when)
+        alt, az = self.mount.actual_altaz(alt, az)
+        alt += self.rng.gauss(0, self.noise)
+        az += self.rng.gauss(0, self.noise)
         return astro.altaz_to_j2000(alt, az, self.site, when)
 
 
@@ -81,3 +87,57 @@ class SimSolver(Solver):
         sol = solution_from_header(hdr, solver=self.name, image=str(image), y_down=True)
         sol.solve_seconds = 0.0
         return sol
+
+
+def simulate_alignment(cfg: dict, site: Site, start: datetime, geometry, catalog_targets,
+                       n_points: int = 6, n_tests: int = 8, noise_deg: float = 0.01,
+                       verbose: bool = True, seed: int = 3):
+    """Align a virtual mount with known faults, then GOTO test targets with the model.
+
+    Returns (fitted model, list of (target id, error without model, error with model)).
+    """
+    from .align import choose_alignment_targets, run_alignment
+    from .centering import apply_model_correction
+    from .model import PointingState
+
+    say = print if verbose else (lambda *a, **k: None)
+    mount = SimulatedMount(cfg["mount"], geometry=geometry)
+    pts = choose_alignment_targets(catalog_targets, site, start, n_points)
+    if len(pts) < 3:
+        raise RuntimeError("not enough catalogue targets above the horizon for alignment")
+    world = SimWorld(pts[0], site, start, mount, seconds_per_picture=60, noise_deg=noise_deg, seed=seed)
+    state = PointingState(None)
+    say(f"Alignment targets: {', '.join(t.id for t in pts)}")
+    model, _ = run_alignment(pts, cfg=cfg, site=site, source=SimSource(world), solver=SimSolver(world),
+                             mount=mount, state=state, verbose=verbose)
+    if model is None:
+        raise RuntimeError("alignment failed")
+    say("\nFitted model:\n" + model.describe())
+
+    rng = random.Random(seed)
+    when = world.t
+    visible = [t for t in catalog_targets
+               if astro.j2000_to_altaz(t.ra_deg, t.dec_deg, site, when)[0] > 20]
+    tests = rng.sample(visible, min(n_tests, len(visible)))
+    results = []
+    say(f"\nGOTO test without pictures ({len(tests)} targets):")
+    for t in tests:
+        alt, az = astro.j2000_to_altaz(t.ra_deg, t.dec_deg, site, when)
+        raw = SimulatedMount(cfg["mount"], geometry=geometry).actual_altaz(alt, az)
+        before = _sep_altaz(az, alt, raw[1], raw[0])
+        mount.goto(t)
+        apply_model_correction(t, model, state, site, mount, cfg, when, say=lambda *a, **k: None)
+        a_alt, a_az = mount.actual_altaz(alt, az)
+        after = _sep_altaz(az, alt, a_az, a_alt)
+        results.append((t.id, before, after))
+        say(f"  {t.id:8} off by {before:5.2f}° without model  ->  {after:5.3f}° with model")
+        when += timedelta(minutes=3)
+    return model, results
+
+
+def _sep_altaz(az1, alt1, az2, alt2) -> float:
+    import math
+    r = math.radians
+    c = (math.sin(r(alt1)) * math.sin(r(alt2))
+         + math.cos(r(alt1)) * math.cos(r(alt2)) * math.cos(r(az1 - az2)))
+    return math.degrees(math.acos(max(-1.0, min(1.0, c))))

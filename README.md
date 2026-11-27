@@ -122,6 +122,62 @@ Safety built into the loop:
   for pictures Pi-lomar saves, or uses the camera only when you've told it to.
   Motor moves go through Pi-lomar's own Tune menu.
 
+## Startup alignment: a pointing model
+
+Plate-solving every target works, but most of Pi-lomar's pointing error is the
+same every night: the base isn't perfectly level, "home" isn't exactly south
+and level, and the camera sits slightly sideways on its arm. `align` measures
+these once, so later GOTOs land on target **without taking a picture**.
+
+```
+pilomar-ps align          # visits ~6 spread-out targets, solves each, fits the model
+pilomar-ps goto m31       # GOTO + predicted correction, no picture
+pilomar-ps center m31     # optional: one confirming picture (usually already centred)
+```
+
+Example from the simulator, with a mount whose base is tilted 0.86°, home off by
+1.2° and the camera 0.3° sideways (`pilomar-ps simulate-align`):
+
+```
+  IA      +1.200°  azimuth index (home offset)
+  IE      -0.597°  altitude index (level offset)
+  AN      +0.503°  base tilt north-south
+  AW      -0.694°  base tilt east-west
+  CA      +0.307°  camera sideways (collimation)
+  fitted from 6 pictures: pointing error 1.50° rms before -> 0.008° rms after
+
+GOTO test without pictures:
+  m31      off by  1.67° without model  ->  0.010° with model
+  m15      off by  2.07° without model  ->  0.012° with model
+```
+
+On real hardware expect less than the simulator shows: backlash and gear errors
+change from move to move, and a model can't remove them. A few tenths of a degree
+is a realistic result. That is still far inside the 22° field of a 16 mm lens.
+
+**Why not measure latitude and longitude from the stars instead?** Because for an
+alt-az mount a base tilted by 1° looks exactly the same as a level base about
+110 km away. Star pictures measure where the mount's vertical axis points, which
+mixes location and levelling together. Your map location is already accurate to
+about 0.01°, so we keep it and measure the mount's own errors instead.
+
+How it fits with Pi-lomar: alignment makes no Tune moves, so it compares Pi-lomar's
+own idea of where it points with where the camera really points. Afterwards
+`goto` (and `center`) apply the predicted difference through Tune, and the add-on
+keeps a ledger (`data/pointing_state.json`) of every Tune it has applied, because
+Pi-lomar keeps Tune offsets for good.
+
+Rules of thumb:
+* Run `align` again after anything that moves the mount mechanically: re-levelling,
+  a manual realignment with Motor tools, or Pi-lomar losing its position after a
+  forced stop.
+* Don't make manual Tune moves between `align` and `goto`; the add-on can't see them.
+  If you do, run `align` again.
+* The correction depends on where the target is in the sky. After a long tracking
+  run, `pilomar-ps goto <target> --no-slew` re-applies it for the target's new position.
+* Every solve from `center` is logged, so `pilomar-ps model fit` can refine the
+  model from normal use without a new alignment.
+
 ## Ways of working
 
 Two settings decide how hands-off it is:
@@ -181,6 +237,10 @@ pilomar-ps solve path/to/image.jpg     # where was this picture pointing?
 pilomar-ps solve image.jpg --target m31   # ...and how far from M31?
 pilomar-ps watch --target m31          # solve every picture Pi-lomar saves; shows drift
 pilomar-ps simulate m31 --az 1.5 --alt -0.8   # run the whole loop with a virtual mount
+pilomar-ps align                       # startup alignment (pointing model)
+pilomar-ps goto m31                    # GOTO + model correction, no picture
+pilomar-ps model show|fit|reset        # inspect, refine or clear the model
+pilomar-ps simulate-align              # test alignment on a virtual tilted mount
 pilomar-ps config                      # show all settings
 ```
 
@@ -193,8 +253,10 @@ Targets can be Messier or NGC numbers (`m31`, `M 31`, `NGC 7000`), names
 |---|---|---|
 | 1. Software | `python3 -m unittest discover -s tests` | any computer |
 | 2. Whole loop | `pilomar-ps simulate m31` (try `--wrong-sign`, `--fail 1`) | any computer |
+| 2b. Alignment | `pilomar-ps simulate-align` (try `--an 2 --aw -1`) | any computer |
 | 3. Solver | `pilomar-ps solve` on a star picture you've already taken | Pi, no sky |
 | 4. Live, by hand | `pilomar-ps center <target>` with `advisor` | clear night |
+| 4b. Alignment | `pilomar-ps align`, then `goto` + `center` to check how close it lands | clear night |
 | 5. Hands-free | `mount.backend = "tmux"`, first with `--dry-run` | clear night |
 
 **Before trusting `tmux` mode**, check one thing by hand: in Pi-lomar, Motor
@@ -214,15 +276,15 @@ check `steps_per_degree_*` against the figure Pi-lomar prints on its Tune screen
   defaults follow Pi-lomar 1.3.0 and still need checking on real hardware.
 * With `pilomar-folder`, *you* trigger the picture in Pi-lomar unless you set
   `mount.tmux.capture_keys`.
-* Near the zenith, alt-az mounts need large azimuth moves for small sky offsets;
-  the tool warns above 80° altitude.
+* Near the zenith, alt-az mounts need large azimuth moves for small sky offsets.
+  Corrections are limited by their size on the sky (10°) and by azimuth turn (30°),
+  and the tool warns above 80° altitude.
+* `tmux` GOTO for alignment (`mount.tmux.goto_keys`) is empty by default; until you
+  fill in and check the key sequence, `align` asks you to GOTO each target yourself.
 * The ASTAP back end (`solver.backend = "astap"`) is included but less tested than astrometry.net.
 
 ## Roadmap
 
-* **Pointing model.** `pointing_log.csv` records target and solved positions
-  for every solve. Enough of them across the sky lets us fit the mount's
-  systematic errors (tilt, homing offset) so the first GOTO lands closer.
 * **Autonomous sessions.** `suggest` → GOTO → `center` → observe, chained by a
   scheduler.
 * **Proper hook in Pi-lomar.** If Pi-lomar's author is interested, a small
@@ -239,6 +301,8 @@ pilomar_platesolve/
   camera.py         picture sources: rpicam-still, Pi-lomar's folders, a file
   mount.py          applying corrections: advisor, tmux, simulated
   centering.py      error calculation, centring loop, logs
+  model.py          pointing model (tilt, offsets, collimation) and Tune ledger
+  align.py          startup alignment: choose targets, solve, fit
   catalog.py        target lookup (Pi-lomar's catalogue + built-in list)
   pilomar_bridge.py the only file that knows about Pi-lomar (read-only)
   sim.py            virtual sky/mount/solver for testing

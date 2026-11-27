@@ -60,7 +60,35 @@ which is what we want after a plate-solve correction.
 * the next solve's hint is the last solution (small search radius, tight scale
   range), so later solves are faster than the first
 
-## 5. Adding a back end
+## 5. Pointing model
+
+`model.py` fits six standard alt-az terms by linear least squares (pure Python
+normal equations):
+
+```
+d_alt         = IE - AN*cos(A) - AW*sin(A)
+d_az * cos(E) = IA*cos(E) + CA + NPAE*sin(E) - sin(E)*(AN*sin(A) - AW*cos(A))
+```
+
+The tilt terms come from rotating the pointing vector v by a small rotation
+w = t(-sin θ, cos θ, 0), i.e. the vertical axis leaning by t toward azimuth θ:
+δv = w × v gives δE = -t cos(A-θ) and δA = -t tan(E) sin(A-θ), with
+AN = t cos θ and AW = t sin θ. The azimuth equation is scaled by cos(E) so both
+equations are in on-sky degrees.
+
+Terms are added as the data allows: 2 points → IA, IE; 3 → plus tilt; 4–5 → plus
+CA; 6 or more spanning 20° of altitude → plus NPAE.
+
+"Mount" coordinates = Pi-lomar's logical alt/az + the Tune ledger. Alignment
+makes no Tunes and resets the ledger, so its epoch's frame is Pi-lomar's
+logical frame at that moment. `predicted_correction` inverts the model
+(fixed-point iteration) to find the mount position that puts the camera on
+target, and returns the difference from the current one.
+
+Corrections are limited by on-sky size (`max_correction_deg`) and by raw azimuth
+turn (`max_azimuth_turn_deg`), because near the zenith azimuth is ill-defined.
+
+## 6. Adding a back end
 
 * **solver**: subclass `solvers.Solver`, implement `available`, `command`, `solve`
   returning a `PlateSolution`; register it in `SOLVERS`

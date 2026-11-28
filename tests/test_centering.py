@@ -91,6 +91,28 @@ class TestCentering(unittest.TestCase):
         self.assertAlmostEqual(err.d_az_deg, 0.0, places=4)
         self.assertAlmostEqual(err.separation_deg, 1.0, places=3)
 
+    def test_error_against_pilomar_position_ignores_sky_drift(self):
+        # Pi-lomar stopped at the target's position 10 minutes ago and is not
+        # tracking. The camera points exactly where Pi-lomar thinks: no Tune needed,
+        # even though the target itself has drifted away.
+        from datetime import timedelta
+        tgt = Catalog().resolve("m31")
+        t_goto = T0
+        az0_alt = astro.j2000_to_altaz(tgt.ra_deg, tgt.dec_deg, SITE, t_goto)
+        later = t_goto + timedelta(minutes=10)
+        ra, dec = astro.altaz_to_j2000(az0_alt[0], az0_alt[1], SITE, later)
+        c = cfg()
+        mount = SimulatedMount(c["mount"])
+        world = SimWorld(tgt, SITE, later, mount, noise_deg=0.0)
+        sol = SimSolver(world)
+        world.pointings["x.jpg"] = (ra, dec)
+        s = sol.solve("x.jpg")
+        err = pointing_error(tgt, s, SITE, later, logical=(az0_alt[1], az0_alt[0]))
+        self.assertLess(err.separation_deg, 1e-3)
+        self.assertEqual(err.reference, "pilomar")
+        drift = pointing_error(tgt, s, SITE, later)
+        self.assertGreater(drift.separation_deg, 1.0)   # what the old comparison would see
+
     def test_logbook(self):
         with tempfile.TemporaryDirectory() as d:
             c = cfg()

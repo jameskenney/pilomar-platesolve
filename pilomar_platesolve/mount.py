@@ -47,6 +47,13 @@ class Mount:
         """Apply a correction. Return False if the user aborted."""
         raise NotImplementedError
 
+    def position(self):
+        """Pi-lomar's own idea of where it points (az, alt), or None if unknown.
+
+        This is the *logical* position: Tune moves don't change it.
+        """
+        return None
+
     def goto(self, target) -> bool:
         """Have Pi-lomar slew to a target. Return False if the user aborted."""
         print(f"\n  >>> In Pi-lomar: select target '{target.id}' and GOTO it (main menu 4).")
@@ -117,6 +124,27 @@ class TmuxMount(Mount):
             else:
                 subprocess.run(["tmux", "send-keys", "-t", session, "-l", "--", k], check=True)
             time.sleep(delay)
+
+    POS_RE = re.compile(r"Camera:\s*azimuth:\s*-?\d+\s*\(\s*(-?[\d.]+)\s*°?\)\s*"
+                        r"altitude:\s*-?\d+\s*\(\s*(-?[\d.]+)\s*°?\)")
+
+    def position(self):
+        """Read the 'Camera: azimuth ... altitude ...' line from Pi-lomar's Status (3)."""
+        if self.dry_run or not self.t.get("read_position", True) or not self.available():
+            return None
+        try:
+            self.ensure_main_menu()
+            before = self._count(self._screen(), self.HEADERS["main"])
+            self._type(str(self.t.get("status_option", "3")))
+            self._wait_main_after(before, 20)
+        except RuntimeError:
+            return None
+        lines = self._screen()
+        for ln in reversed(lines):
+            m = self.POS_RE.search(ln)
+            if m:
+                return float(m.group(1)) % 360.0, float(m.group(2))
+        return None
 
     @staticmethod
     def radec_definition(target) -> str:

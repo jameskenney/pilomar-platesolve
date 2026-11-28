@@ -86,9 +86,22 @@ def select_target():
             return
 
 
+POS = [192000, 0]
+
+
+def status():
+    az, alt = POS[0] / 1066.6667, POS[1] / 1066.6667
+    print("+------------------------------+")
+    print(f"| Camera: azimuth: {POS[0]} ( {az:07.3f}°) altitude: {POS[1]} ( {alt:07.3f}°)  |")
+    print("+------------------------------+")
+
+
 while True:
     print(MAIN)
     a = ask("Menu option : ")
+    if a == "3":
+        status()
+        continue
     if a == "x":
         if ask("Do you really want to shut down? [y/N] ").lower() == "y":
             log.write("EXIT\n")
@@ -102,6 +115,7 @@ while True:
         print("Moving to target...")
         time.sleep(1.5)
         termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        POS[0], POS[1] = 128007, 16006
         log.write("GOTO\n")
         log.flush()
         continue

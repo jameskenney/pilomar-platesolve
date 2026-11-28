@@ -76,7 +76,9 @@ def run_alignment(targets: list[Target], *, cfg: dict, site: Site, source, solve
         l_alt, l_az = astro.j2000_to_altaz(t.ra_deg, t.dec_deg, site, when)
         # Mount frame = Pi-lomar's logical position. Any Tune moves made before
         # alignment are physically baked in, so the ledger restarts at zero.
-        m_az, m_alt = l_az, l_alt
+        # Read it from Pi-lomar when possible (it doesn't track at its menu).
+        pos = mount.position() if hasattr(mount, "position") else None
+        m_az, m_alt = pos if pos is not None else (l_az, l_alt)
         a_alt, a_az = astro.j2000_to_altaz(sol.ra_deg, sol.dec_deg, site, when)
         s = Sample(m_az, m_alt, a_az, a_alt, t.id)
         samples.append(s)

@@ -241,8 +241,16 @@ def cmd_center(cfg, args):
         cfg["centering"]["tolerance_deg"] = args.tolerance
     if args.max_iter:
         cfg["centering"]["max_iterations"] = args.max_iter
-    print("First make sure Pi-lomar has done GOTO on this target and is tracking it.")
     mount = _make_mount(cfg, args)
+    if args.goto:
+        try:
+            check_goto_safe(target, site, astro.utcnow(), cfg)
+        except UnsafeTarget as e:
+            sys.exit(f"error: {e}")
+        if not mount.goto(target):
+            return 1
+    else:
+        print("First make sure Pi-lomar has done GOTO on this target.")
     source = _make_source(cfg, args, mount)
     log = Logbook(cfg["data_dir"])
     log.event("start", command="center", target=target.id, mount=mount.name)
@@ -568,7 +576,10 @@ def cmd_capture(cfg, args):
     from .wcs import image_size
     w, h = image_size(path)
     print(f"Captured {path} ({w} x {h} px, {path.stat().st_size // 1024} KB) in {time.monotonic() - t0:.1f} s")
-    return 0
+    if not args.solve:
+        return 0
+    args.image, args.hint, args.time, args.json = str(path), None, None, False
+    return cmd_solve(cfg, args)
 
 
 def cmd_tune(cfg, args):
@@ -710,6 +721,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tolerance", type=float, help="degrees")
     s.add_argument("--max-iter", type=int)
     s.add_argument("--no-model", action="store_true", help="ignore the pointing model")
+    s.add_argument("--goto", action="store_true", help="have Pi-lomar GOTO the target first")
 
     s = sub.add_parser("align", help="startup alignment: fit the mount's pointing model")
     s.add_argument("--points", type=int, default=6)
@@ -743,6 +755,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("capture", help="take one picture with rpicam-still (camera check)")
     s.add_argument("--exposure", type=float, help="seconds (e.g. 0.01 indoors in daylight)")
     s.add_argument("--gain", type=float)
+    s.add_argument("--solve", action="store_true", help="plate-solve the picture straight away")
+    s.add_argument("--target", help="with --solve: also compare with this target")
 
     s = sub.add_parser("tune", help="send one Tune move through the configured mount mode")
     s.add_argument("--az", type=float, default=0.0, help="degrees")

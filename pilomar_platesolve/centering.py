@@ -35,8 +35,14 @@ class PointingError:
     d_alt_deg: float
     rotation_deg: float
     parallactic_deg: float
+    reference: str = "target"      # "pilomar": compared with Pi-lomar's own position
+    sky_target_alt: float = 0.0
+    sky_target_az: float = 0.0
 
     def describe(self) -> str:
+        if self.reference == "pilomar":
+            return (f"mount error {self.separation_deg:.3f}° (camera vs where Pi-lomar thinks it points)"
+                    f"  |  needs azimuth {self.d_az_deg:+.3f}°, altitude {self.d_alt_deg:+.3f}°")
         ew = "east" if self.east_deg > 0 else "west"
         ns = "north" if self.north_deg > 0 else "south"
         return (f"off by {self.separation_deg:.3f}°: {abs(self.east_deg):.3f}° too far {ew}, "
@@ -44,18 +50,35 @@ class PointingError:
                 f"needs azimuth {self.d_az_deg:+.3f}°, altitude {self.d_alt_deg:+.3f}°")
 
 
-def pointing_error(target: Target, sol: PlateSolution, site: Site, when: datetime) -> PointingError:
+def pointing_error(target: Target, sol: PlateSolution, site: Site, when: datetime,
+                   logical: tuple[float, float] | None = None) -> PointingError:
+    """Error between where the camera should point and where it really points.
+
+    ``logical`` is Pi-lomar's own position (az, alt) if known. Pi-lomar does
+    not track while it sits at its menu, so the sky drifts away from the
+    target after a GOTO; comparing with Pi-lomar's position measures only the
+    mount's error, which is what a Tune should remove. Without it, the
+    target's current position is used (correct while Pi-lomar is tracking).
+    """
     t_alt, t_az = astro.j2000_to_altaz(target.ra_deg, target.dec_deg, site, when)
     a_alt, a_az = astro.j2000_to_altaz(sol.ra_deg, sol.dec_deg, site, when)
     east, north = astro.tangent_offsets(target.ra_deg, target.dec_deg, sol.ra_deg, sol.dec_deg)
+    ref_az, ref_alt = (logical if logical is not None else (t_az, t_alt))
+    if logical is not None:
+        ref_ra, ref_dec = astro.altaz_to_j2000(ref_alt, ref_az, site, when)
+        sep = astro.angular_separation(ref_ra, ref_dec, sol.ra_deg, sol.dec_deg)
+    else:
+        sep = astro.angular_separation(target.ra_deg, target.dec_deg, sol.ra_deg, sol.dec_deg)
     return PointingError(
         when=when.isoformat(),
-        separation_deg=astro.angular_separation(target.ra_deg, target.dec_deg, sol.ra_deg, sol.dec_deg),
+        separation_deg=sep,
         east_deg=east, north_deg=north,
-        target_alt=t_alt, target_az=t_az, actual_alt=a_alt, actual_az=a_az,
-        d_az_deg=wrap180(t_az - a_az), d_alt_deg=t_alt - a_alt,
+        target_alt=ref_alt, target_az=ref_az, actual_alt=a_alt, actual_az=a_az,
+        d_az_deg=wrap180(ref_az - a_az), d_alt_deg=ref_alt - a_alt,
         rotation_deg=sol.rotation_deg,
         parallactic_deg=astro.parallactic_angle(sol.ra_deg, sol.dec_deg, site, when),
+        reference="pilomar" if logical is not None else "target",
+        sky_target_alt=t_alt, sky_target_az=t_az,
     )
 
 
@@ -173,7 +196,8 @@ def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solv
                 log.event("solve_failed", n=n, image=str(image), error=str(e))
             result.reason = f"plate solve failed: {e}"
             return result
-        err = pointing_error(target, sol, site, when)
+        logical = mount.position() if hasattr(mount, "position") else None
+        err = pointing_error(target, sol, site, when, logical)
         say(sol.summary())
         say(f"    {err.describe()}")
         it = Iteration(n, str(image), sol.to_dict(), asdict(err))
@@ -253,6 +277,9 @@ def apply_model_correction(target: Target, model: PointingModel, state: Pointing
                            say=print, log: Logbook | None = None) -> bool:
     """Predict the pointing error from the model and Tune it away, no picture needed."""
     t_alt, t_az = astro.j2000_to_altaz(target.ra_deg, target.dec_deg, site, when)
+    logical = mount.position() if hasattr(mount, "position") else None
+    if logical is not None:
+        t_az, t_alt = logical
     d_az, d_alt = predicted_correction(model, state, t_az, t_alt)
     d_az, d_alt = clamp_on_sky(d_az, d_alt, t_alt, float(cfg["centering"]["max_correction_deg"]),
                                float(cfg["centering"].get("max_azimuth_turn_deg", 30.0)))

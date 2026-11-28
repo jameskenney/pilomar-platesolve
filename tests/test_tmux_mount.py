@@ -75,6 +75,18 @@ class TestTmuxMount(unittest.TestCase):
         self.assertEqual(self.moves(), ["TARGET ra 00 42 44 dec +41 16 09 m31", "GOTO"])
         self.assertEqual(m._state()[0], "main")
 
+    def test_reads_pilomar_position(self):
+        from pilomar_platesolve.catalog import Catalog
+        m = self.mount()
+        az, alt = m.position()
+        self.assertAlmostEqual(az, 180.0, places=2)
+        self.assertAlmostEqual(alt, 0.0, places=2)
+        m.goto(Catalog().resolve("m31"))
+        az, alt = m.position()
+        self.assertAlmostEqual(az, 120.007, places=2)
+        self.assertAlmostEqual(alt, 15.006, places=2)
+        self.assertEqual(m._state()[0], "main")
+
     def test_answers_no_to_shutdown_question(self):
         m = self.mount()
         subprocess.run(["tmux", "send-keys", "-t", SESSION, "x", "Enter"], check=True)

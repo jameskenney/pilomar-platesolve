@@ -204,6 +204,7 @@ def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solv
             if log:
                 log.event("solve_failed", n=n, image=str(image), error=str(e))
             result.reason = f"plate solve failed: {e}"
+            say(f"\n  ✘ {result.reason}")
             return result
         logical = mount.position() if hasattr(mount, "position") else None
         if logical is None and ref_kind == "pilomar":

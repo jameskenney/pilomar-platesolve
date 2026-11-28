@@ -71,7 +71,7 @@ DEFAULTS: dict = {
             "select_target_option": "1",
             "radec_option": "11",
             "goto_option": "4",
-            "goto_timeout_s": 300,
+            "goto_timeout_s": 600,  # a 180° slew takes about 8 minutes
             "goto_settle_s": 5,
             "key_delay_s": 0.8,
             # Blind mode only. {az_steps} / {alt_steps} are replaced with integers.

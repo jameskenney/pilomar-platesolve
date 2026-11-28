@@ -172,15 +172,24 @@ class TmuxMount(Mount):
         before = self._count(self._screen(), self.HEADERS["main"])
         self._type(str(self.t.get("goto_option", "4")))
         # Wait for the main menu to come back (Pi-lomar may only return after the slew).
-        self._wait_main_after(before, float(self.t.get("goto_timeout_s", 300)))
+        self._wait_main_after(before, float(self.t.get("goto_timeout_s", 600)))
         time.sleep(float(self.t.get("goto_settle_s", 5)))
 
     def _wait_main_after(self, before: int, timeout: float):
-        deadline = time.monotonic() + timeout
-        state, lines = "busy", []
-        while time.monotonic() < deadline:
+        """Wait for the main menu to come back. While Pi-lomar keeps printing
+        progress (the screen changes), the wait is extended, up to a hard cap,
+        so a long slew (several minutes) is not mistaken for a hang."""
+        start = time.monotonic()
+        deadline = start + timeout
+        cap = start + float(self.t.get("goto_max_s", 1800))
+        state, lines, last_seen = "busy", [], None
+        while time.monotonic() < min(deadline, cap):
             time.sleep(float(self.t.get("poll_s", 0.3)))
             state, lines = self._state()
+            tail = lines[-1] if lines else ""
+            if state == "busy" and tail != last_seen:
+                last_seen = tail
+                deadline = max(deadline, time.monotonic() + 60)
             if state == "session_question":
                 self._answer_session_question()
                 continue

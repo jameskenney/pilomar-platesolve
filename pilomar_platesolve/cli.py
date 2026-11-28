@@ -16,6 +16,8 @@
     pilomar-ps capture                   take one picture (camera check)
     pilomar-ps tune --az 1               send one Tune move (mount check)
     pilomar-ps slew M31 | --altaz 10 190 have Pi-lomar GOTO (no correction)
+    pilomar-ps backlash                  measure gear slack (then re-run align)
+    pilomar-ps annotate IMAGE            solve + save a labelled copy (stars, objects)
     pilomar-ps focus                     star size every few seconds, for focusing
 """
 
@@ -37,7 +39,7 @@ from .centering import (Logbook, center_target, expected_fov_width, pointing_err
                         solve_with_fallback)
 from .config import DEFAULTS, config_path, load_config
 from .align import choose_alignment_targets, run_alignment, samples_from_log
-from .centering import UnsafeTarget, apply_model_correction, check_goto_safe
+from .centering import UnsafeTarget, apply_model_correction, check_goto_safe, note_goto, tune
 from .model import PointingModel, PointingState, fit_model
 from .mount import AdvisorMount, SimulatedMount, TmuxMount
 from .pilomar_bridge import newest_image, pilomar_running, site_from_config
@@ -159,7 +161,44 @@ def cmd_solve(cfg, args):
     if args.json:
         print(json.dumps(out, indent=2, default=str))
     print(f"\n  saved {dest}")
+    if getattr(args, "annotate", False):
+        when = _parse_time(args.time) or FileSource(args.image).capture()[1]
+        _annotate(cfg, args.image, sol, target, when)
     return 0
+
+
+def _annotate(cfg, image, sol, target=None, when=None):
+    """Save an annotated copy of a solved picture in data/annotated."""
+    from . import annotate as ann
+    if not ann.available():
+        print("  annotated picture skipped: OpenCV (python3-opencv) is not installed")
+        return None
+    root = Path(cfg["pilomar_root"])
+    hip = root / "data" / "hip_main.dat"
+    stars = ann.load_stars(hip) if hip.exists() else None
+    dsos = [t for t in Catalog(root).all()
+            if (t.magnitude is not None and t.magnitude <= 10.0) or t.id.startswith("m")]
+    out = Path(cfg["data_dir"]) / "annotated" / (Path(image).stem + ".annotated.jpg")
+    title = f"{target.id.upper()} {target.name}" if target else Path(image).name
+    try:
+        res = ann.annotate(image, sol, out, stars=stars, dsos=dsos, target=target, when=when,
+                           title=title)
+    except ValueError as e:
+        print(f"  annotated picture skipped: {e}")
+        return None
+    names = ", ".join(res["named"][:8] + [d.upper() for d in res["dsos"][:8]])
+    print(f"  annotated picture: {res['path']}")
+    print(f"    {res['stars']} catalogue stars marked" + (f"; labelled: {names}" if names else "")
+          + ("" if stars else " (no hip_main.dat found, so no star circles)"))
+    return res
+
+
+def cmd_annotate(cfg, args):
+    """Plate-solve a picture and save an annotated copy."""
+    args.annotate = True
+    if not args.target and not args.hint:
+        args.hint = None
+    return cmd_solve(cfg, args)
 
 
 def cmd_target(cfg, args):
@@ -256,6 +295,8 @@ def cmd_center(cfg, args):
     log.event("start", command="center", target=target.id, mount=mount.name)
     t_start = time.monotonic()
     model, state = _load_model(cfg, args)
+    if args.goto:
+        note_goto(mount, state)
     if args.no_model or args.image:
         model = None
     elif model:
@@ -399,8 +440,10 @@ def cmd_goto(cfg, args):
     except UnsafeTarget as e:
         sys.exit(f"error: {e}")
     mount = _make_mount(cfg, args)
-    if not args.no_slew and not mount.goto(target):
-        return 1
+    if not args.no_slew:
+        if not mount.goto(target):
+            return 1
+        note_goto(mount, state)
     log = Logbook(cfg["data_dir"])
     ok = apply_model_correction(target, model, state, site, mount, cfg, astro.utcnow(), log=log)
     log.event("goto", target=target.id, ok=ok, slewed=not args.no_slew)
@@ -591,11 +634,42 @@ def cmd_tune(cfg, args):
     corr = mount.to_steps(args.az, args.alt)
     print(f"Tune: azimuth {args.az:+.3f}° = {corr.az_steps:+d} steps, "
           f"altitude {args.alt:+.3f}° = {corr.alt_steps:+d} steps")
-    if not mount.apply(corr):
+    _, state = _load_model(cfg, args)
+    if not tune(mount, corr, state, cfg, compensate=not args.raw):
         return 1
-    if not args.dry_run:
-        _, state = _load_model(cfg)
-        state.add(args.az, args.alt)
+    return 0
+
+
+def cmd_backlash(cfg, args):
+    """Measure the gear slack on each axis with Tune moves and plate solves."""
+    from .backlash import BacklashError, measure_backlash, save_backlash
+    from .centering import backlash_settings
+    if args.show:
+        b_az, b_alt = backlash_settings(cfg)
+        print(f"Gear slack in use: azimuth {b_az:.3f}°, altitude {b_alt:.3f}°")
+        return 0
+    site = _site(cfg)
+    args.image, args.dry_run = None, False
+    mount = _make_mount(cfg, args)
+    source = _make_source(cfg, args, mount)
+    solver = make_solver(cfg, _workdir(cfg))
+    _, state = _load_model(cfg)
+    axes = ("az", "alt") if args.axis == "both" else (args.axis,)
+    print("Point at a patch of sky at 30-60° altitude (after a GOTO) before running this.")
+    t0 = time.monotonic()
+    try:
+        res = measure_backlash(cfg=cfg, site=site, source=source, solver=solver, mount=mount,
+                               state=state, axes=axes, move_deg=args.move,
+                               settle=lambda: time.sleep(float(cfg["centering"]["settle_s"])))
+    except (BacklashError, CaptureError) as e:
+        sys.exit(f"error: {e}")
+    path = save_backlash(cfg["data_dir"], res, args.move)
+    b_az, b_alt = backlash_settings(cfg)
+    print(f"\nSaved {path}: azimuth {b_az:.3f}°, altitude {b_alt:.3f}°  "
+          f"({time.monotonic() - t0:.0f} s)")
+    print("Tune corrections that change direction now add this much. "
+          "Re-run 'pilomar-ps align' so the model is fitted with it.")
+    Logbook(cfg["data_dir"]).event("backlash", **{k: v for k, v in res.items() if k != "detail"})
     return 0
 
 
@@ -623,6 +697,8 @@ def cmd_slew(cfg, args):
     t0 = time.monotonic()
     try:
         ok = mount.goto(target)
+        if ok and not getattr(args, "dry_run", False):
+            note_goto(mount, _load_model(cfg)[1])
     except RuntimeError as e:
         print(f"error: {e}")
         return 3
@@ -705,6 +781,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--hint", help="approximate position to speed up solving (name or 'ra dec')")
     s.add_argument("--time", help="UTC time of the picture (ISO), default file time")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--annotate", action="store_true",
+                   help="also save an annotated copy (stars, names, objects) in data/annotated")
+
+    s = sub.add_parser("annotate", help="plate-solve a picture and save an annotated copy")
+    s.add_argument("image")
+    s.add_argument("--target", help="mark this target (e.g. M31); also speeds up solving")
+    s.add_argument("--hint", help="approximate position (name or 'ra dec')")
+    s.add_argument("--time", help="UTC time of the picture (ISO), default file time")
+    s.add_argument("--json", action="store_true")
 
     s = sub.add_parser("target", help="show a target's position now")
     s.add_argument("name")
@@ -764,12 +849,21 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--gain", type=float)
     s.add_argument("--solve", action="store_true", help="plate-solve the picture straight away")
     s.add_argument("--target", help="with --solve: also compare with this target")
+    s.add_argument("--annotate", action="store_true", help="with --solve: save an annotated copy")
 
     s = sub.add_parser("tune", help="send one Tune move through the configured mount mode")
     s.add_argument("--az", type=float, default=0.0, help="degrees")
     s.add_argument("--alt", type=float, default=0.0, help="degrees")
     s.add_argument("--mount", choices=["advisor", "tmux"])
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--raw", action="store_true", help="exact steps, no gear-slack allowance")
+
+    s = sub.add_parser("backlash", help="measure gear slack with Tune moves and plate solves")
+    s.add_argument("--axis", choices=["az", "alt", "both"], default="both")
+    s.add_argument("--move", type=float, default=2.0, help="test move in degrees (default 2)")
+    s.add_argument("--mount", choices=["advisor", "tmux"])
+    s.add_argument("--source", choices=["rpicam", "pilomar-folder"])
+    s.add_argument("--show", action="store_true", help="just print the slack in use")
 
     s = sub.add_parser("slew", help="have Pi-lomar GOTO a target, no correction (tmux test)")
     s.add_argument("name", nargs="?")
@@ -820,7 +914,8 @@ COMMANDS = {"check": cmd_check, "solve": cmd_solve, "target": cmd_target, "sugge
             "align": cmd_align, "goto": cmd_goto, "model": cmd_model,
             "simulate-align": cmd_simulate_align, "report": cmd_report,
             "selftest": cmd_selftest, "capture": cmd_capture, "tune": cmd_tune,
-            "slew": cmd_slew, "focus": cmd_focus}
+            "slew": cmd_slew, "focus": cmd_focus, "backlash": cmd_backlash,
+            "annotate": cmd_annotate}
 
 
 def main(argv=None) -> int:

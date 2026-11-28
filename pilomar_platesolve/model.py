@@ -222,14 +222,26 @@ class PointingState:
         self.tune_az = 0.0
         self.tune_alt = 0.0
         self.epoch = ""
+        # Direction of each motor's last move (+1, -1, or 0 = unknown), so the
+        # gear slack (backlash) can be taken up when a correction reverses.
+        self.dir_az = 0
+        self.dir_alt = 0
         if self.path and self.path.exists():
             d = json.loads(self.path.read_text())
             self.tune_az, self.tune_alt = d.get("tune_az", 0.0), d.get("tune_alt", 0.0)
             self.epoch = d.get("epoch", "")
+            self.dir_az, self.dir_alt = int(d.get("dir_az", 0)), int(d.get("dir_alt", 0))
 
     def add(self, d_az: float, d_alt: float):
         self.tune_az += d_az
         self.tune_alt += d_alt
+        self.save()
+
+    def set_dirs(self, dir_az: int | None, dir_alt: int | None):
+        if dir_az is not None:
+            self.dir_az = int(dir_az)
+        if dir_alt is not None:
+            self.dir_alt = int(dir_alt)
         self.save()
 
     def reset(self, epoch: str = ""):
@@ -241,7 +253,8 @@ class PointingState:
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps({"tune_az": self.tune_az, "tune_alt": self.tune_alt,
-                                             "epoch": self.epoch}, indent=2))
+                                             "epoch": self.epoch, "dir_az": self.dir_az,
+                                             "dir_alt": self.dir_alt}, indent=2))
 
     def mount_position(self, logical_az: float, logical_alt: float) -> tuple[float, float]:
         return wrap360(logical_az + self.tune_az), logical_alt + self.tune_alt

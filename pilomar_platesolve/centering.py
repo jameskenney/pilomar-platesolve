@@ -14,7 +14,7 @@ from . import astro
 from .astro import Site, wrap180
 from .catalog import Target
 from .model import PointingModel, PointingState, predicted_correction
-from .mount import Mount
+from .mount import Correction, Mount
 from .solvers import SolveError, SolveHint, Solver
 from .wcs import PlateSolution
 
@@ -153,13 +153,21 @@ def expected_fov_width(cfg: dict) -> float:
 
 
 def solve_with_fallback(solver: Solver, image, hint: SolveHint, blind_retry: bool) -> PlateSolution:
+    """Solve; if that fails, retry with a cleaned picture and the lens preset
+    (astrometry.net), then without the position hint."""
     try:
         return solver.solve(image, hint)
-    except SolveError:
-        if not blind_retry or hint.ra_deg is None:
-            raise
-        blind = SolveHint(fov_width_deg=hint.fov_width_deg, fov_tolerance=hint.fov_tolerance)
-        return solver.solve(image, blind)
+    except SolveError as first:
+        err = first
+    if getattr(solver, "cfg", {}).get("rescue", False) and hasattr(solver, "solve_rescue"):
+        try:
+            return solver.solve_rescue(image, hint)
+        except SolveError as e:
+            err = e
+    if not blind_retry or hint.ra_deg is None:
+        raise err
+    blind = SolveHint(fov_width_deg=hint.fov_width_deg, fov_tolerance=hint.fov_tolerance)
+    return solver.solve(image, blind)
 
 
 def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solver,
@@ -253,10 +261,9 @@ def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solv
         it.correction = asdict(corr)
         if log:
             log.event("correction", n=n, **asdict(corr))
-        if not mount.apply(corr):
+        if not tune(mount, corr, state, cfg, say):
             result.reason = "stopped by user"
             return result
-        state.add(corr.d_az_deg, corr.d_alt_deg)
         sleep(float(c["settle_s"]))
 
     result.reason = f"not centred after {c['max_iterations']} pictures"
@@ -301,10 +308,65 @@ def apply_model_correction(target: Target, model: PointingModel, state: Pointing
     corr = mount.to_steps(d_az, d_alt)
     if log:
         log.event("model_correction", target=target.id, **asdict(corr))
-    if not mount.apply(corr):
+    return tune(mount, corr, state, cfg, say)
+
+
+def backlash_settings(cfg: dict) -> tuple[float, float]:
+    """Gear slack in degrees (azimuth, altitude): measured file first, then config."""
+    p = Path(cfg.get("data_dir", "data")) / "backlash.json"
+    if p.exists():
+        try:
+            d = json.loads(p.read_text())
+            return float(d.get("az_deg", 0.0)), float(d.get("alt_deg", 0.0))
+        except (ValueError, OSError):
+            pass
+    m = cfg.get("mount", {})
+    return float(m.get("backlash_az_deg", 0.0)), float(m.get("backlash_alt_deg", 0.0))
+
+
+def _sign(x: float) -> int:
+    return (x > 0) - (x < 0)
+
+
+def tune(mount: Mount, corr: Correction, state: PointingState | None, cfg: dict,
+         say=print, compensate: bool = True) -> bool:
+    """Apply a Tune correction, taking up gear slack when a motor reverses.
+
+    The ledger records the camera's intended movement (corr.d_*), not the
+    extra slack steps, because the slack moves the motor but not the camera.
+    """
+    b_az, b_alt = backlash_settings(cfg) if compensate else (0.0, 0.0)
+    m = cfg.get("mount", {})
+    d_az, d_alt = _sign(corr.az_steps), _sign(corr.alt_steps)
+    extra_az = extra_alt = 0
+    if state is not None and d_az and state.dir_az and d_az != state.dir_az and b_az > 0:
+        extra_az = d_az * int(round(b_az * float(m.get("steps_per_degree_az", 1066.67))))
+    if state is not None and d_alt and state.dir_alt and d_alt != state.dir_alt and b_alt > 0:
+        extra_alt = d_alt * int(round(b_alt * float(m.get("steps_per_degree_alt", 1066.67))))
+    send = corr
+    if extra_az or extra_alt:
+        parts = []
+        if extra_az:
+            parts.append(f"azimuth {extra_az:+d}")
+        if extra_alt:
+            parts.append(f"altitude {extra_alt:+d}")
+        say(f"    + gear slack for the change of direction: {', '.join(parts)} steps")
+        send = Correction(corr.d_az_deg, corr.d_alt_deg, corr.az_steps + extra_az,
+                          corr.alt_steps + extra_alt)
+    if not mount.apply(send):
         return False
-    state.add(d_az, d_alt)
+    if state is not None:
+        state.add(corr.d_az_deg, corr.d_alt_deg)
+        state.set_dirs(d_az or None, d_alt or None)
     return True
+
+
+def note_goto(mount: Mount, state: PointingState | None):
+    """After a GOTO, remember which way each motor last turned (if known)."""
+    if state is None:
+        return
+    d = getattr(mount, "last_goto_dir", None)
+    state.set_dirs(*(d if d else (0, 0)))
 
 
 class UnsafeTarget(RuntimeError):

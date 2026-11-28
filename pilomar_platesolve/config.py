@@ -26,7 +26,14 @@ DEFAULTS: dict = {
         "search_radius_deg": 15.0,          # how far from the hint to look
         "blind_retry": True,                # retry with no position hint if a hinted solve fails
         "astrometry": {"solve_field": "solve-field", "downsample": 2, "cpulimit_s": 60,
-                       "extra_args": []},
+                       "extra_args": [],
+                       # Lens preset for star detection: "auto" (by field width),
+                       # "16mm", "50mm" or "none". Used on the rescue retry, or on
+                       # every solve with preset_when = "always".
+                       "preset": "auto", "preset_when": "rescue",
+                       # If a picture doesn't solve, retry once with a cleaned-up
+                       # copy (needs OpenCV, which Pi-lomar installs) and the preset.
+                       "rescue": True, "clean": True, "rescue_cpulimit_s": 30},
         "astap": {"astap": "astap_cli", "downsample": 2, "timeout_s": 90,
                   "aspect_h_over_w": 0.75, "extra_args": []},
     },
@@ -55,6 +62,13 @@ DEFAULTS: dict = {
         # direction check passes. Flip to -1 if centring runs away.
         "az_sign": 1,
         "alt_sign": 1,
+        # Gear slack (backlash): how far a motor turns before the camera moves
+        # when it reverses. When a Tune correction reverses direction, this
+        # much is added so the camera moves the full amount asked for.
+        # 'pilomar-ps backlash' measures it and saves data/backlash.json, which
+        # takes precedence over these numbers.
+        "backlash_az_deg": 0.0,
+        "backlash_alt_deg": 0.0,
         "tmux": {
             "session": "pilomar",
             # "verified": read Pi-lomar's screen and wait for each prompt (default).

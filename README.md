@@ -178,6 +178,50 @@ Rules of thumb:
 * Every solve from `center` is logged, so `pilomar-ps model fit` can refine the
   model from normal use without a new alignment.
 
+## Gear slack (backlash)
+
+Pi-lomar's worm gears have a little slack: when a motor reverses, it turns a
+fraction of a degree before the camera starts to move (about 0.5–0.8° in
+azimuth on the reference build). A Tune correction that changes direction then
+falls short, and a pointing model fitted from GOTOs in one direction is off for
+GOTOs that arrive from the other side.
+
+```
+pilomar-ps backlash          # about 2 minutes: Tune +2°, -2°, +2° on each axis, solving each picture
+pilomar-ps backlash --show   # the values in use
+```
+
+It saves the result to `data/backlash.json`. From then on, every Tune
+correction that reverses a motor adds that much, so the camera moves the full
+amount asked for. The add-on also reads Pi-lomar's position before and after
+each GOTO, so it knows which way the gears were last loaded. Run `align` again
+after measuring. Point at 30–60° altitude for the measurement: azimuth is hard
+to measure near the zenith. You can also set `mount.backlash_az_deg` and
+`mount.backlash_alt_deg` by hand; `pilomar-ps tune --raw` sends exact steps.
+
+## Hard pictures and annotated pictures
+
+If a picture doesn't solve (haze, moonlight, a glow near the horizon), the add-on
+tries once more with a **cleaned copy** (smooth sky background removed, hot
+pixels filtered, stretched) and the **lens preset** from the comments in
+Pi-lomar's own solver (16 mm: `--objs 120 --uniformize 120 --sigma 6`; 50 mm:
+`--objs 80 --uniformize 80 --sigma 8`; chosen by field width). Only then does it
+try without the position hint. The solution says `(retry: cleaned, 16mm preset)`
+when this was needed. The clean-up uses OpenCV, which Pi-lomar already installs;
+without it the retry uses just the preset. Settings: `solver.astrometry.preset`,
+`preset_when` (`rescue` or `always`), `rescue`, `clean`.
+
+```
+pilomar-ps annotate picture.jpg --target m31    # solve and label
+pilomar-ps capture --solve --annotate           # new picture, solved and labelled
+```
+
+The annotated copy (in `data/annotated/`, never in Pi-lomar's folders) marks the
+image centre, the target and the offset to it, north and east arrows, the 150
+brightest stars from Pi-lomar's `hip_main.dat`, bright star names, and Messier and
+bright NGC objects in view, with RA/Dec, rotation, field and scale in the corner.
+It's modelled on the `.solution.jpg` Pi-lomar's own solver draws.
+
 ## Ways of working
 
 Two settings decide how hands-off it is:
@@ -319,7 +363,9 @@ match yours.
 | Live centring under the sky | ✅ 27 Nov 2026: M15 went from 0.33° to 0.078° in 2 pictures (22 s); M31 from 0.56° to 0.030° in 4 pictures (53 s). Azimuth backlash of about 0.7–0.8° showed when the motor reversed; the loop corrected through it |
 | Focus helper (`focus`) | ✅ 27 Nov 2026: found best focus at about 100 stars and 2.0 px star size; the sharp zone is very narrow at f/1.4 |
 | Stacking a centred session | ✅ 27 Nov 2026: 60 × 4 s Pi-lomar DNG frames of M31 plus 20 darks, stacked in DeepSkyStacker 6.2.2 (its raw reader opens Pi HQ camera DNGs) |
-| Startup alignment and model GOTO | ⏳ Not yet tested |
+| Startup alignment and model GOTO | ✅ 27 Nov 2026: 3 of 6 points solved (the others were low, toward moonlight and house lights); fitted base tilt 0.87° and home offsets of 0.8° / 0.4°, 1.19° → 0.27° rms. On M45 the model got altitude right but azimuth wrong when the slew came from the other direction: gear slack, which `backlash` (v0.4.0) now measures and compensates. Retest pending |
+| Long sessions in tmux | ✅ Fixed in v0.3.8: after a long session tmux's 2000-line scrollback filled and position reads timed out |
+| Backlash compensation, rescue solves, annotated pictures | ⏳ v0.4.0, tested in simulation and on synthetic pictures; not yet under the sky |
 
 After testing, run `pilomar-ps report`. It prints your hardware, software
 versions, solve times, centring accuracy and alignment results as one block,
@@ -367,6 +413,9 @@ pilomar_platesolve/
   mount.py          applying corrections: advisor, tmux, simulated
   centering.py      error calculation, centring loop, logs
   model.py          pointing model (tilt, offsets, collimation) and Tune ledger
+  backlash.py       measures gear slack with Tune moves and plate solves
+  imageprep.py      optional clean-up of hard pictures before a retry (OpenCV)
+  annotate.py       labelled copy of a solved picture (OpenCV)
   align.py          startup alignment: choose targets, solve, fit
   catalog.py        target lookup (Pi-lomar's catalogue + built-in list)
   pilomar_bridge.py the only file that knows about Pi-lomar (read-only)

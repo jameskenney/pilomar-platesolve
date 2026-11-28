@@ -12,7 +12,7 @@ from pathlib import Path
 from . import astro
 from .astro import Site, wrap180
 from .catalog import Target
-from .centering import (Logbook, UnsafeTarget, check_goto_safe, expected_fov_width,
+from .centering import (Logbook, note_goto, UnsafeTarget, check_goto_safe, expected_fov_width,
                         solve_with_fallback)
 from .model import PointingModel, PointingState, Sample, fit_model
 from .solvers import SolveError, SolveHint, Solver
@@ -77,6 +77,7 @@ def run_alignment(targets: list[Target], *, cfg: dict, site: Site, source, solve
         if not mount.goto(t):
             say("  stopped by user")
             break
+        note_goto(mount, state)
         image, when = source.capture()
         hint = SolveHint(t.ra_deg, t.dec_deg, float(cfg["solver"]["search_radius_deg"]), fov)
         try:

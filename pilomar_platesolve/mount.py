@@ -125,8 +125,10 @@ class TmuxMount(Mount):
                 subprocess.run(["tmux", "send-keys", "-t", session, "-l", "--", k], check=True)
             time.sleep(delay)
 
-    POS_RE = re.compile(r"Camera:\s*azimuth:\s*-?\d+\s*\(\s*(-?[\d.]+)\s*°?\)\s*"
-                        r"altitude:\s*-?\d+\s*\(\s*(-?[\d.]+)\s*°?\)")
+    POS_RE = re.compile(r"Camera:\s*azimuth:\s*(?P<az_steps>-?\d+)\s*\(\s*(?P<az>-?[\d.]+)\s*°?\)\s*"
+                        r"altitude:\s*(?P<alt_steps>-?\d+)\s*\(\s*(?P<alt>-?[\d.]+)\s*°?\)")
+    last_steps: tuple[int, int] | None = None
+    last_goto_dir: tuple[int, int] | None = None
 
     def position(self):
         """Read the 'Camera: azimuth ... altitude ...' line from Pi-lomar's Status (3)."""
@@ -143,7 +145,8 @@ class TmuxMount(Mount):
         for ln in reversed(lines):
             m = self.POS_RE.search(ln)
             if m:
-                return float(m.group(1)) % 360.0, float(m.group(2))
+                self.last_steps = (int(m["az_steps"]), int(m["alt_steps"]))
+                return float(m["az"]) % 360.0, float(m["alt"])
         return None
 
     @staticmethod
@@ -211,8 +214,16 @@ class TmuxMount(Mount):
             if not self.available():
                 raise RuntimeError("tmux session not found; start Pi-lomar inside tmux")
             t0 = time.monotonic()
+            self.last_goto_dir = None
+            before = self.last_steps if self.position() is not None else None
             self.goto_verified(target)
             print(f"  Pi-lomar is back at its main menu after {time.monotonic() - t0:.0f} s")
+            if before is not None and self.position() is not None:
+                # Which way each motor turned on the way in: that's the side the
+                # gear slack is on now.
+                sg = lambda v: (v > 0) - (v < 0)
+                self.last_goto_dir = (sg(self.last_steps[0] - before[0]),
+                                      sg(self.last_steps[1] - before[1]))
             return True
         keys = self.t.get("goto_keys") or []
         if not keys:
@@ -409,7 +420,7 @@ class SimulatedMount(Mount):
     def __init__(self, cfg: dict, err_az_deg: float = 0.0, err_alt_deg: float = 0.0,
                  lost_motion_fraction: float = 0.0,
                  true_az_sign: int | None = None, true_alt_sign: int | None = None,
-                 geometry=None):
+                 geometry=None, backlash_az_deg: float = 0.0, backlash_alt_deg: float = 0.0):
         """``true_*_sign`` is how the hardware really responds to +steps; by
         default it matches the config (i.e. the config is right).
         ``lost_motion_fraction`` imitates backlash eating part of each move.
@@ -425,6 +436,11 @@ class SimulatedMount(Mount):
         self.tune_alt = 0.0
         self.history: list[Correction] = []
         self.gotos: list = []
+        # Gear slack: the camera follows the motor only once the slack is taken
+        # up (a dead band). Start as if the last move was positive.
+        self.slack = {"az": float(backlash_az_deg), "alt": float(backlash_alt_deg)}
+        self.motor = {"az": self.slack["az"] / 2, "alt": self.slack["alt"] / 2}
+        self.output = {"az": 0.0, "alt": 0.0}
 
     # Remaining fixed error (for the simple constant-offset case).
     @property
@@ -450,6 +466,17 @@ class SimulatedMount(Mount):
         self.history.append(corr)
         moved_az = corr.az_steps / float(self.cfg["steps_per_degree_az"]) * self.true_az_sign
         moved_alt = corr.alt_steps / float(self.cfg["steps_per_degree_alt"]) * self.true_alt_sign
-        self.tune_az += moved_az * (1 - self.lost)
-        self.tune_alt += moved_alt * (1 - self.lost)
+        self.tune_az += self._through_gears("az", moved_az) * (1 - self.lost)
+        self.tune_alt += self._through_gears("alt", moved_alt) * (1 - self.lost)
         return True
+
+    def _through_gears(self, axis: str, motor_move: float) -> float:
+        """How far the camera moves when the motor moves (dead-band backlash)."""
+        half = self.slack[axis] / 2
+        self.motor[axis] += motor_move
+        before = self.output[axis]
+        if self.motor[axis] - self.output[axis] > half:
+            self.output[axis] = self.motor[axis] - half
+        elif self.motor[axis] - self.output[axis] < -half:
+            self.output[axis] = self.motor[axis] + half
+        return self.output[axis] - before

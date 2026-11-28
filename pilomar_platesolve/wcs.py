@@ -124,7 +124,8 @@ class PlateSolution:
             f"  (diagonal {self.fov_diag_deg:.2f}°)",
             f"  Plate scale   : {self.scale_arcsec:.2f}\"/pixel"
             f"  ({self.width_px} x {self.height_px} px)",
-            f"  Solved by     : {self.solver} in {self.solve_seconds:.1f} s",
+            f"  Solved by     : {self.solver} in {self.solve_seconds:.1f} s"
+            + (f"  (retry: {self.extra['rescue']})" if self.extra.get("rescue") else ""),
         ])
 
 

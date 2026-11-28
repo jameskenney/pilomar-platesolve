@@ -3,4 +3,4 @@
 A companion to https://github.com/Short-bus/pilomar that never modifies it.
 """
 
-__version__ = "0.3.8"
+__version__ = "0.4.0"

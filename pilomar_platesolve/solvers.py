@@ -37,6 +37,25 @@ class SolveHint:
     fov_tolerance: float = 0.25          # +/- fraction for the scale search
 
 
+# Source-extraction settings per lens, from the (unused) comments in Pi-lomar's
+# own pilomarplatesolve.py. --objs: how many of the brightest stars to try;
+# --uniformize: spread them over the whole picture; --sigma: detection threshold.
+LENS_PRESETS = {
+    "16mm": ["--objs", "120", "--uniformize", "120", "--sigma", "6"],
+    "50mm": ["--objs", "80", "--uniformize", "80", "--sigma", "8"],
+}
+
+
+def preset_for(name: str, fov_width_deg: float | None) -> tuple[str, list[str]]:
+    """'auto' picks by field width: the 16 mm lens sees ~23°, the 50 mm ~7°."""
+    if name in LENS_PRESETS:
+        return name, LENS_PRESETS[name]
+    if name == "auto" and fov_width_deg:
+        key = "16mm" if fov_width_deg > 12 else "50mm"
+        return key, LENS_PRESETS[key]
+    return "none", []
+
+
 class Solver:
     name = "base"
 
@@ -83,14 +102,45 @@ class AstrometryNetSolver(Solver):
         if hint.ra_deg is not None and hint.dec_deg is not None:
             cmd += ["--ra", f"{hint.ra_deg:.5f}", "--dec", f"{hint.dec_deg:.5f}",
                     "--radius", f"{hint.radius_deg or 15:.2f}"]
+        if self._preset_args:
+            cmd += self._preset_args
         cmd += [str(a) for a in self.cfg.get("extra_args", [])]
         return cmd
+
+    _preset_args: list[str] = []
+
+    def solve_rescue(self, image, hint=None) -> PlateSolution:
+        """Second try for a picture that didn't solve: clean it up first and
+        use the lens preset. The solution is for the original picture (same size)."""
+        from . import imageprep
+        image = Path(image)
+        hint = hint or SolveHint()
+        name, args = preset_for(str(self.cfg.get("preset", "auto")), hint.fov_width_deg)
+        cleaned = imageprep.clean_for_solving(image, self.workdir) if self.cfg.get("clean", True) else None
+        old_args, old_cpu = self._preset_args, self.cfg.get("cpulimit_s", 60)
+        self._preset_args = args
+        self.cfg["cpulimit_s"] = self.cfg.get("rescue_cpulimit_s", 30)
+        try:
+            sol = self.solve(cleaned or image, hint)
+        finally:
+            self._preset_args = old_args
+            self.cfg["cpulimit_s"] = old_cpu
+        sol.image = str(image)
+        sol.extra["rescue"] = ", ".join(x for x in (
+            "cleaned" if cleaned else "", f"{name} preset" if args else "") if x) or "retry"
+        return sol
 
     def solve(self, image, hint=None) -> PlateSolution:
         image = Path(image)
         hint = hint or SolveHint()
         if not image.exists():
             raise SolveError(f"image not found: {image}")
+        if self.cfg.get("preset_when") == "always" and not self._preset_args:
+            self._preset_args = preset_for(str(self.cfg.get("preset", "auto")), hint.fov_width_deg)[1]
+            try:
+                return self.solve(image, hint)
+            finally:
+                self._preset_args = []
         wcs = self.workdir / (image.stem + ".wcs")
         wcs.unlink(missing_ok=True)
         cmd = self.command(image, hint)
@@ -138,8 +188,33 @@ class AstapSolver(Solver):
                     "-r", f"{hint.radius_deg or 15:.2f}"]
         else:
             cmd += ["-r", "180"]
+        if self._preset_args:
+            cmd += self._preset_args
         cmd += [str(a) for a in self.cfg.get("extra_args", [])]
         return cmd
+
+    _preset_args: list[str] = []
+
+    def solve_rescue(self, image, hint=None) -> PlateSolution:
+        """Second try for a picture that didn't solve: clean it up first and
+        use the lens preset. The solution is for the original picture (same size)."""
+        from . import imageprep
+        image = Path(image)
+        hint = hint or SolveHint()
+        name, args = preset_for(str(self.cfg.get("preset", "auto")), hint.fov_width_deg)
+        cleaned = imageprep.clean_for_solving(image, self.workdir) if self.cfg.get("clean", True) else None
+        old_args, old_cpu = self._preset_args, self.cfg.get("cpulimit_s", 60)
+        self._preset_args = args
+        self.cfg["cpulimit_s"] = self.cfg.get("rescue_cpulimit_s", 30)
+        try:
+            sol = self.solve(cleaned or image, hint)
+        finally:
+            self._preset_args = old_args
+            self.cfg["cpulimit_s"] = old_cpu
+        sol.image = str(image)
+        sol.extra["rescue"] = ", ".join(x for x in (
+            "cleaned" if cleaned else "", f"{name} preset" if args else "") if x) or "retry"
+        return sol
 
     def solve(self, image, hint=None) -> PlateSolution:
         image = Path(image)

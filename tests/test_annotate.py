@@ -36,6 +36,20 @@ class TestAnnotate(unittest.TestCase):
             self.assertEqual(res["stars"], 4)
             self.assertEqual(cv2.imread(str(out)).shape[:2], (760, 1014))
 
+    def test_same_object_labelled_once(self):
+        from pilomar_platesolve.catalog import Target
+        h = {"CRVAL1": 10.68, "CRVAL2": 41.27, "CRPIX1": 500.5, "CRPIX2": 400.5,
+             "CD1_1": -0.0112, "CD1_2": 0.0, "CD2_1": 0.0, "CD2_2": -0.0112, "IMAGEW": 1000, "IMAGEH": 800}
+        sol = solution_from_header(h, 1000, 800, y_down=True)
+        with tempfile.TemporaryDirectory() as d:
+            import cv2, numpy as np
+            png = Path(d) / "blank.png"
+            cv2.imwrite(str(png), np.zeros((800, 1000), np.uint8))
+            dsos = [Target("pgc0002557", "", 10.6847, 41.2690), Target("ngc205", "", 10.0921, 41.6853),
+                    Target("m31", "Andromeda", 10.6846, 41.2688), Target("m110", "", 10.0920, 41.6853)]
+            res = ann.annotate(png, sol, Path(d) / "o.jpg", dsos=dsos)
+            self.assertEqual(sorted(res["dsos"]), ["m110", "m31"])
+
     def test_north_arrow_matches_rotation(self):
         # rotation 0: north is straight up (negative y on a top-down picture)
         h = {"CRVAL1": 10.0, "CRVAL2": 40.0, "CRPIX1": 500.5, "CRPIX2": 400.5,

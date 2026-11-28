@@ -147,11 +147,20 @@ def annotate(image: str | Path, sol: PlateSolution, out: str | Path, *, stars=No
             text(name, p[0] + 10 * u, p[1] - 8 * u, GREEN, fs * 1.2)
             summary["named"].append(name)
 
-    # Deep-sky objects
-    for t in dsos or []:
+    # Deep-sky objects. Catalogues list some objects twice (NGC 205 is M110,
+    # PGC 2557 is M31): label each place once, preferring the Messier name.
+    def rank(t):
+        i = t.id.lower()
+        return (0 if i[:1] == "m" and i[1:].isdigit() else 1 if i.startswith(("ngc", "ic")) else 2, i)
+    placed: list[tuple[float, float]] = []
+    for t in sorted(dsos or [], key=rank):
         p = _in_view(sol, t.ra_deg, t.dec_deg)
         if not p:
             continue
+        near = max(6.0, 0.05 * 3600 / sol.scale_arcsec)      # 0.05° or 6 px
+        if any(math.hypot(p[0] - q[0], p[1] - q[1]) < near for q in placed):
+            continue
+        placed.append(p)
         r_px = 12 * u
         if t.size_deg:
             r_px = max(r_px, t.size_deg * 3600 / sol.scale_arcsec / 2)

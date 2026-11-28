@@ -134,7 +134,7 @@ class TmuxMount(Mount):
             return None
         try:
             self.ensure_main_menu()
-            before = self._count(self._screen(), self.HEADERS["main"])
+            before = self._count(self._fresh_screen(), self.HEADERS["main"])
             self._type(str(self.t.get("status_option", "3")))
             self._wait_main_after(before, 20)
         except RuntimeError:
@@ -166,10 +166,10 @@ class TmuxMount(Mount):
         self._wait("select", 20)
         self._type(str(self.t.get("radec_option", "11")))
         self._wait("radec_prompt", 20)
-        before = self._count(self._screen(), self.HEADERS["main"])
+        before = self._count(self._fresh_screen(), self.HEADERS["main"])
         self._type(self.radec_definition(target))
         self._wait_main_after(before, 30)
-        before = self._count(self._screen(), self.HEADERS["main"])
+        before = self._count(self._fresh_screen(), self.HEADERS["main"])
         self._type(str(self.t.get("goto_option", "4")))
         # Wait for the main menu to come back (Pi-lomar may only return after the slew).
         self._wait_main_after(before, float(self.t.get("goto_timeout_s", 600)))
@@ -243,6 +243,18 @@ class TmuxMount(Mount):
         while lines and not lines[-1]:
             lines.pop()
         return lines
+
+    def _fresh_screen(self) -> list[str]:
+        """Clear tmux's scrollback, then read the screen, before counting prompts.
+
+        Prompts are counted to tell a new one from an old one. tmux keeps only
+        the last 2000 lines, so after a long session old prompts scroll away as
+        new ones appear and the count stops rising (seen on real hardware:
+        Status reads timed out). Clearing the scrollback first keeps the count
+        rising. It doesn't touch Pi-lomar or what is on screen."""
+        subprocess.run(["tmux", "clear-history", "-t", self.t.get("session", "pilomar")],
+                       capture_output=True)
+        return self._screen()
 
     def _state(self) -> tuple[str, list[str]]:
         lines = self._screen()
@@ -344,7 +356,7 @@ class TmuxMount(Mount):
             time.sleep(0.5)
 
     def _tune_axis(self, option: str, steps: int):
-        before = sum("steps to move" in ln for ln in self._screen())
+        before = sum("steps to move" in ln for ln in self._fresh_screen())
         self._type(option)
         self._wait("tune_prompt", 20, before + 1)
         self._type(str(steps))

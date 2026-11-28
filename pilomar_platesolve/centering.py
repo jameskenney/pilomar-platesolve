@@ -183,6 +183,7 @@ def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solv
             return result
         sleep(float(c["settle_s"]))
 
+    ref_kind = None
     for n in range(1, int(c["max_iterations"]) + 1):
         say(f"\n[{n}] Capturing...")
         image, when = source.capture()
@@ -197,6 +198,15 @@ def center_target(target: Target, *, cfg: dict, site: Site, source, solver: Solv
             result.reason = f"plate solve failed: {e}"
             return result
         logical = mount.position() if hasattr(mount, "position") else None
+        if logical is None and ref_kind == "pilomar":
+            logical = mount.position()          # one retry
+            if logical is None:
+                result.reason = ("could not read Pi-lomar's position (Status); stopped rather "
+                                 "than mix two reference frames. Check: tmux attach -t pilomar")
+                say(sol.summary())
+                say(f"\n  ✘ {result.reason}")
+                return result
+        ref_kind = ref_kind or ("pilomar" if logical is not None else "target")
         err = pointing_error(target, sol, site, when, logical)
         say(sol.summary())
         say(f"    {err.describe()}")

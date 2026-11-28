@@ -117,6 +117,15 @@ class TestTmuxMount(unittest.TestCase):
         m.ensure_main_menu()
         self.assertEqual(m._state()[0], "main")
 
+    def test_position_reads_survive_full_scrollback(self):
+        # tmux keeps a limited scrollback; once full, old menus scroll away as
+        # new ones arrive. Simulate a small limit: every Status read must work.
+        m = self.mount()
+        real = m._screen
+        m._screen = lambda: real()[-60:]
+        for _ in range(12):
+            self.assertIsNotNone(m.position())
+
     def test_answers_no_to_shutdown_question(self):
         m = self.mount()
         subprocess.run(["tmux", "send-keys", "-t", SESSION, "x", "Enter"], check=True)

@@ -58,7 +58,13 @@ SELECT = """
  x Exit                         ? Refresh"""
 
 
+ASKED = [False]
+
+
 def select_target():
+    if POS[0] != 192000 and not ASKED[0]:
+        ASKED[0] = True
+        ask("Is this session complete? [y/N] ")
     while True:
         print(SELECT)
         c = ask("Choose option : ")

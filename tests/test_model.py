@@ -104,6 +104,22 @@ class TestAlignment(unittest.TestCase):
         azs = sorted(astro.j2000_to_altaz(t.ra_deg, t.dec_deg, SITE, T0)[1] for t in pts)
         self.assertGreater(azs[-1] - azs[0], 150)
 
+    def test_targets_respect_azimuth_and_altitude_limits(self):
+        from pilomar_platesolve.align import az_in_range
+        from pilomar_platesolve.catalog import Target
+        grid = [Target(f"g{i}", "", ra, dec) for i, (ra, dec) in enumerate(
+            (ra, dec) for ra in range(0, 360, 15) for dec in range(-30, 90, 10))]
+        pts = choose_alignment_targets(grid, SITE, T0, 6, min_alt=35, az_range=(90, 270))
+        self.assertGreaterEqual(len(pts), 3)
+        azs = []
+        for t in pts:
+            alt, az = astro.j2000_to_altaz(t.ra_deg, t.dec_deg, SITE, T0)
+            self.assertGreaterEqual(alt, 35)
+            self.assertTrue(90 <= az <= 270)
+            azs.append(az)
+        self.assertEqual(azs, sorted(azs))          # one sweep
+        self.assertTrue(az_in_range(10, (270, 90)) and not az_in_range(180, (270, 90)))
+
     def test_end_to_end_simulated_alignment(self):
         cfg = _merge(DEFAULTS, {})
         model, results = simulate_alignment(cfg, SITE, T0, PointingModel(params=dict(TRUTH)),

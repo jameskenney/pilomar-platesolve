@@ -96,6 +96,10 @@ DEFAULTS: dict = {
         "zenith_warn_alt_deg": 80.0,
     },
 
+    # Startup alignment: keep targets above min_alt_deg and (optionally) inside an
+    # azimuth range [from, to] measured clockwise, e.g. [90, 270] = south half only.
+    "align": {"min_alt_deg": 30.0, "az_range": None},
+
     # Never GOTO closer than this to the Sun.
     "sun_avoid_deg": 30.0,
 

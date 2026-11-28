@@ -346,7 +346,11 @@ def cmd_align(cfg, args):
     if args.targets:
         targets = [_target(cfg, n) for n in args.targets.split(",")]
     else:
-        targets = choose_alignment_targets(cat.all(), site, now, args.points)
+        al = cfg.get("align", {})
+        min_alt = args.min_alt if args.min_alt is not None else float(al.get("min_alt_deg", 30))
+        az_range = tuple(args.az_range) if args.az_range else al.get("az_range")
+        targets = choose_alignment_targets(cat.all(), site, now, args.points, min_alt=min_alt,
+                                           az_range=az_range)
     if len(targets) < 3:
         sys.exit("error: fewer than 3 usable targets above the horizon; try --targets")
     print("Alignment: Pi-lomar will visit these targets. Make NO manual Tune moves meanwhile.")
@@ -726,6 +730,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("align", help="startup alignment: fit the mount's pointing model")
     s.add_argument("--points", type=int, default=6)
     s.add_argument("--targets", help="comma-separated targets instead of automatic choice")
+    s.add_argument("--min-alt", type=float, help="lowest altitude to use (default 30)")
+    s.add_argument("--az-range", nargs=2, type=float, metavar=("FROM", "TO"),
+                   help="only azimuths from FROM clockwise to TO, e.g. 90 270 for the south half")
     s.add_argument("--mount", choices=["advisor", "tmux"])
     s.add_argument("--source", choices=["rpicam", "pilomar-folder"])
     s.add_argument("--image", help=argparse.SUPPRESS)

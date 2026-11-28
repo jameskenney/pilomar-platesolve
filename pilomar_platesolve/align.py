@@ -24,13 +24,24 @@ def _altaz_distance(a1, e1, a2, e2) -> float:
     return math.degrees(math.acos(max(-1.0, min(1.0, c))))
 
 
+def az_in_range(az: float, az_range) -> bool:
+    """az_range = (start, end) going clockwise; (270, 90) passes through north."""
+    if not az_range:
+        return True
+    a, b = az_range[0] % 360, az_range[1] % 360
+    az %= 360
+    return a <= az <= b if a <= b else (az >= a or az <= b)
+
+
 def choose_alignment_targets(targets: list[Target], site: Site, when: datetime, n: int = 6,
-                             min_alt: float = 25.0, max_alt: float = 75.0) -> list[Target]:
-    """Pick n catalogue targets spread as widely as possible across the visible sky."""
+                             min_alt: float = 25.0, max_alt: float = 75.0,
+                             az_range=None) -> list[Target]:
+    """Pick n catalogue targets spread as widely as possible across the visible sky,
+    optionally only between min_alt and max_alt and inside an azimuth range."""
     cands = []
     for t in targets:
         alt, az = astro.j2000_to_altaz(t.ra_deg, t.dec_deg, site, when)
-        if min_alt <= alt <= max_alt:
+        if min_alt <= alt <= max_alt and az_in_range(az, az_range):
             cands.append((t, az, alt))
     if not cands:
         return []
@@ -43,7 +54,9 @@ def choose_alignment_targets(targets: list[Target], site: Site, when: datetime, 
         if min(_altaz_distance(best[1], best[2], k[1], k[2]) for k in chosen) < 5:
             break  # nothing usefully different left
         chosen.append(best)
-    chosen.sort(key=lambda c: c[1])  # visit in azimuth order: shorter slews
+    # Visit in azimuth order, starting from the range's start: one sweep, no wrap.
+    start = az_range[0] % 360 if az_range else 0.0
+    chosen.sort(key=lambda c: (c[1] - start) % 360)
     return [c[0] for c in chosen]
 
 

@@ -181,6 +181,9 @@ class TmuxMount(Mount):
         while time.monotonic() < deadline:
             time.sleep(float(self.t.get("poll_s", 0.3)))
             state, lines = self._state()
+            if state == "session_question":
+                self._answer_session_question()
+                continue
             if state == "main" and self._count(lines, self.HEADERS["main"]) > before:
                 return
             if state not in ("busy", "main"):
@@ -241,6 +244,8 @@ class TmuxMount(Mount):
             return "radec_prompt", lines
         if "[y/N]" in last and "shut down" in last.lower():
             return "shutdown_question", lines
+        if "[y/N]" in last and "session complete" in last.lower():
+            return "session_question", lines
         if re.search(r"option\s*:\s*$", last, re.I):
             best, where = "unknown_menu", -1
             # A menu heading is a line on its own ("Select target" also appears
@@ -268,6 +273,9 @@ class TmuxMount(Mount):
         while time.monotonic() < deadline:
             time.sleep(poll)
             state, lines = self._state()
+            if state == "session_question" and want != "session_question":
+                self._answer_session_question()
+                continue
             if state == want and (min_prompts is None or
                                   sum("steps to move" in ln for ln in lines) >= min_prompts):
                 time.sleep(float(self.t.get("settle_s", 0.3)))
@@ -276,6 +284,13 @@ class TmuxMount(Mount):
         raise RuntimeError(f"Pi-lomar did not reach '{want}' in {timeout:.0f} s "
                            f"(now '{state}', last line: {last!r}). Check it with: "
                            f"tmux attach -t {self.t.get('session', 'pilomar')}")
+
+    def _answer_session_question(self):
+        """Pi-lomar asks 'Is this session complete? [y/N]' when a new target is
+        chosen after an observation. Answer with its default (N) unless configured:
+        the earlier session is left exactly as it was."""
+        self._type(str(self.t.get("session_complete_answer", "n")))
+        time.sleep(float(self.t.get("settle_s", 0.3)) + 0.5)
 
     def ensure_main_menu(self):
         """Back out of Tune / Motor tools / Select target to the main menu.
@@ -288,6 +303,9 @@ class TmuxMount(Mount):
                 return
             if state == "busy":
                 self._wait_not_busy(30)
+                continue
+            if state == "session_question":
+                self._answer_session_question()
                 continue
             if state == "shutdown_question":
                 self._type("n")          # never let Pi-lomar shut down

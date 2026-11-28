@@ -87,6 +87,16 @@ class TestTmuxMount(unittest.TestCase):
         self.assertAlmostEqual(alt, 15.006, places=2)
         self.assertEqual(m._state()[0], "main")
 
+    def test_answers_session_question_during_goto(self):
+        from pilomar_platesolve.catalog import Catalog
+        m = self.mount()
+        m.goto(Catalog().resolve("m31"))          # first GOTO moves it
+        m.goto(Catalog().resolve("m42"))          # next selection asks the question
+        self.assertEqual([x for x in self.moves() if x.startswith(("TARGET", "GOTO"))],
+                         ["TARGET ra 00 42 44 dec +41 16 09 m31", "GOTO",
+                          "TARGET ra 05 35 17 dec -05 23 28 m42", "GOTO"])
+        self.assertEqual(m._state()[0], "main")
+
     def test_answers_no_to_shutdown_question(self):
         m = self.mount()
         subprocess.run(["tmux", "send-keys", "-t", SESSION, "x", "Enter"], check=True)

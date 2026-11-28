@@ -1,0 +1,8 @@
+# The add-on itself has no Python dependencies (standard library only), so the
+# only things to keep up to date are the GitHub Actions used by the workflows.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"

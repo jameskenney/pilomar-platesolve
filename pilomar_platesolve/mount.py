@@ -285,11 +285,18 @@ class TmuxMount(Mount):
                            f"(now '{state}', last line: {last!r}). Check it with: "
                            f"tmux attach -t {self.t.get('session', 'pilomar')}")
 
-    def _answer_session_question(self):
+    def _answer_session_question(self, answer: str | None = None):
         """Pi-lomar asks 'Is this session complete? [y/N]' when a new target is
-        chosen after an observation. Answer with its default (N) unless configured:
-        the earlier session is left exactly as it was."""
-        self._type(str(self.t.get("session_complete_answer", "n")))
+        chosen after an observation (CheckImageSet in pilomar.py). 'y' only lets
+        the target change: nothing is deleted or archived, the earlier images
+        stay where they are. 'N' keeps the old target and returns to the main
+        menu, so selecting a new target needs 'y'."""
+        if answer is None:
+            answer = str(self.t.get("session_complete_answer", "y"))
+        if answer.lower().startswith("y"):
+            print("    Pi-lomar asked 'Is this session complete?' -> y "
+                  "(lets the target change; earlier images are kept)")
+        self._type(answer)
         time.sleep(float(self.t.get("settle_s", 0.3)) + 0.5)
 
     def ensure_main_menu(self):
@@ -305,7 +312,7 @@ class TmuxMount(Mount):
                 self._wait_not_busy(30)
                 continue
             if state == "session_question":
-                self._answer_session_question()
+                self._answer_session_question("n")   # 'n' returns to the main menu
                 continue
             if state == "shutdown_question":
                 self._type("n")          # never let Pi-lomar shut down

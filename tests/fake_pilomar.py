@@ -58,13 +58,12 @@ SELECT = """
  x Exit                         ? Refresh"""
 
 
-ASKED = [False]
-
-
 def select_target():
-    if POS[0] != 192000 and not ASKED[0]:
-        ASKED[0] = True
-        ask("Is this session complete? [y/N] ")
+    # Like CheckImageSet(): once the session has images, every new selection asks.
+    # 'N' (the default) keeps the old target and goes back to the main menu.
+    if POS[0] != 192000:
+        if ask("Is this session complete? [y/N] ").strip().lower() != "y":
+            return
     while True:
         print(SELECT)
         c = ask("Choose option : ")

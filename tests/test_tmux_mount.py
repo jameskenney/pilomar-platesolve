@@ -97,6 +97,26 @@ class TestTmuxMount(unittest.TestCase):
                           "TARGET ra 05 35 17 dec -05 23 28 m42", "GOTO"])
         self.assertEqual(m._state()[0], "main")
 
+    def test_three_gotos_each_answer_session_question(self):
+        # Real Pi-lomar asks on every new selection once images exist; 'N'
+        # would drop back to the main menu (the align failure on 27 Nov).
+        from pilomar_platesolve.catalog import Catalog
+        m = self.mount()
+        for name in ("m31", "m42", "m45"):
+            m.goto(Catalog().resolve(name))
+        self.assertEqual(sum(x.startswith("TARGET") for x in self.moves()), 3)
+        self.assertEqual(m._state()[0], "main")
+
+    def test_ensure_main_menu_answers_n_to_session_question(self):
+        from pilomar_platesolve.catalog import Catalog
+        m = self.mount()
+        m.goto(Catalog().resolve("m31"))
+        subprocess.run(["tmux", "send-keys", "-t", SESSION, "1", "Enter"], check=True)
+        time.sleep(0.5)
+        self.assertEqual(m._state()[0], "session_question")
+        m.ensure_main_menu()
+        self.assertEqual(m._state()[0], "main")
+
     def test_answers_no_to_shutdown_question(self):
         m = self.mount()
         subprocess.run(["tmux", "send-keys", "-t", SESSION, "x", "Enter"], check=True)

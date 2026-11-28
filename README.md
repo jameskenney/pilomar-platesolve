@@ -315,8 +315,10 @@ match yours.
 | Automatic Tune through tmux | ✅ 27 Nov 2026: menu keys checked against Pi-lomar 1.3.0; ±5° azimuth and altitude moved the right way and returned. One keystroke was lost while a motor moved, so tmux mode now reads Pi-lomar's screen and waits for each prompt (v0.3.1) |
 | Automatic GOTO through tmux (`slew`) | ✅ 27 Nov 2026: target entered through Select target → RA-DEC co-ordinates, GOTO to altitude 15°, azimuth 120°. Pi-lomar reported 120.007° / 15.006°, so its coordinate conversion and the add-on's agree to 0.01°. The 60° slew took about 3 minutes, and Pi-lomar returned to its menu afterwards |
 | Sun and horizon safety | ✅ Refused a test point 23° from the Sun and another at 3° altitude |
-| Plate solving real night-sky pictures | ⏳ Not yet tested |
-| Live centring under the sky | ⏳ Not yet tested |
+| Plate solving real night-sky pictures | ✅ 27 Nov 2026: 4 s at gain 16, f/1.4, under a town sky. Solves took 2.2–5.1 s; measured field 22.7° × 17.0° at 40.3″/px (the lens is really about 15.6 mm) |
+| Live centring under the sky | ✅ 27 Nov 2026: M15 went from 0.33° to 0.078° in 2 pictures (22 s); M31 from 0.56° to 0.030° in 4 pictures (53 s). Azimuth backlash of about 0.7–0.8° showed when the motor reversed; the loop corrected through it |
+| Focus helper (`focus`) | ✅ 27 Nov 2026: found best focus at about 100 stars and 2.0 px star size; the sharp zone is very narrow at f/1.4 |
+| Stacking a centred session | ✅ 27 Nov 2026: 60 × 4 s Pi-lomar DNG frames of M31 plus 20 darks, stacked in DeepSkyStacker 6.2.2 (its raw reader opens Pi HQ camera DNGs) |
 | Startup alignment and model GOTO | ⏳ Not yet tested |
 
 After testing, run `pilomar-ps report`. It prints your hardware, software

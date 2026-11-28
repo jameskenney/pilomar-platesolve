@@ -12,6 +12,9 @@ no internet connection.
 It is an **add-on**, not a fork: it lives in its own folder, never edits a
 Pi-lomar file, and keeps working when you update Pi-lomar.
 
+Guides for installing, night use, alignment, stacking and troubleshooting are
+in the [wiki](https://github.com/jameskenney/pilomar-platesolve/wiki).
+
 Example output (from the built-in simulator, starting 1.5° out in azimuth and 0.8° in altitude):
 
 ```
@@ -425,6 +428,7 @@ pilomar_platesolve/
   cli.py            the pilomar-ps command
 tests/              unit tests (stdlib unittest)
 docs/HOW_IT_WORKS.md   the maths, for contributors
+docs/wiki/          the wiki pages, kept here so they're versioned with the code
 ```
 
 ## License
